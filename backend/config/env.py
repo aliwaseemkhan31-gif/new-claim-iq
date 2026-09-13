@@ -61,6 +61,45 @@ def env_int(name: str, *, default: int | None = None, required: bool = False) ->
         ) from None
 
 
+def load_env_file(path: str | os.PathLike[str], *, override: bool = False) -> bool:
+    """Load ``KEY=VALUE`` lines from a file into ``os.environ``.
+
+    Used by development settings, so ``manage.py runserver`` works on a plain
+    workstation from the same ``.env`` that docker-compose reads. Production
+    never calls this: containers receive their environment from compose.
+
+    Variables already present in the environment win unless ``override`` is
+    set, so a one-off value on the command line still takes effect. Blank
+    lines, ``#`` comments, an ``export`` prefix, surrounding quotes and
+    trailing `` #`` comments are handled; nothing is expanded or evaluated.
+
+    Returns:
+        True if the file existed and was read.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return False
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        elif " #" in value:
+            value = value.split(" #", 1)[0].rstrip()
+        if key and (override or key not in os.environ):
+            os.environ[key] = value
+    return True
+
+
 def env_list(name: str, *, default: list[str] | None = None) -> list[str]:
     """Read a comma-separated list. Blank entries are dropped."""
     raw = os.environ.get(name)

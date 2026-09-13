@@ -224,15 +224,55 @@ python -m venv .venv-domain
 ./.venv-domain/Scripts/python -m pytest tests/domain -q
 ```
 
-### Running the frontend against a local backend
+### Running locally without Docker (Windows)
 
-```bash
-cd frontend
-npm ci
-npm run dev        # http://localhost:5273, proxies /api to http://localhost:8100
-npm run test:run
-npm run lint
-```
+Verified end to end on Windows 11 with PostgreSQL 17 + pgvector 0.8.0,
+Python 3.12 and Node 22: sign-in, dashboard health checks and the Settings page
+all working against the real backend.
+
+**Prerequisites:** Python 3.12, Node 22, PostgreSQL with the `vector` extension
+installed, and (optional, for AI answers) Ollama with `qwen2.5:3b-instruct` and
+`bge-m3` pulled. Redis is **not** required locally.
+
+**One-time setup**
+
+1. Create the database role, database and extensions. Run as the `postgres`
+   superuser (psql prompts for that password), choosing a password for the
+   application's own `claimiq` role:
+   ```powershell
+   psql -U postgres -v app_password="choose-a-strong-password" -f scripts\setup_local_db.sql
+   ```
+   Then in `.env` set `POSTGRES_PASSWORD` to that same value and
+   `POSTGRES_HOST=localhost`. (`copy .env.example .env` first if you have no
+   `.env`, and fill in `DJANGO_SECRET_KEY`.)
+2. Backend environment:
+   ```powershell
+   cd backend
+   py -3.12 -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements-local.txt
+   python manage.py migrate
+   python manage.py bootstrap_admin --email you@example.com --organization "Your Company"
+   ```
+   `bootstrap_admin` prompts for a password (12+ characters). Use it rather
+   than `createsuperuser`, which creates a user with no organization — who can
+   then sign in but do nothing.
+3. Frontend dependencies: `cd frontend` then `npm install`.
+
+**Every time**
+
+- Terminal 1: `cd backend`, `.venv\Scripts\activate`,
+  `python manage.py runserver 8100`
+- Terminal 2: `cd frontend`, `npm run dev`
+- Open http://localhost:5273 and sign in.
+
+The port must be **8100**: the Vite dev server proxies `/api` there.
+`manage.py` uses `config.settings.dev`, which reads `.env` itself and, without
+Redis, uses an in-process cache and runs background jobs inline — so a document
+upload blocks until that document is processed.
+
+Tests: `npm run test:run` and `npm run lint` in `frontend`;
+`python -m pytest tests -q` in `backend`.
 
 ---
 

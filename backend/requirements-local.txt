@@ -1,0 +1,32 @@
+# Local development without Docker.
+#
+# The package set verified on Windows 11 with Python 3.12: enough to run the
+# API, sign in, use the dashboard, run migrations and run the test suite.
+#
+# Deliberately omits the heavy machine-learning stack in requirements.txt
+# (python-doctr, sentence-transformers, transformers — which pull in torch,
+# several GB). Without them, digital PDFs process normally but scanned PDFs
+# cannot be OCR'd. Embeddings and answers come from Ollama over HTTP, so they
+# do not need these packages. Install requirements.txt instead if you need OCR.
+
+Django>=5.2,<5.3
+djangorestframework>=3.16
+django-cors-headers>=4.7
+django-filter>=25.1
+psycopg[binary]>=3.2
+pgvector>=0.4
+celery[redis]>=5.5
+redis>=5.2
+django-celery-results>=2.6
+django-celery-beat>=2.8
+argon2-cffi>=23.1
+pdfplumber>=0.11.4
+pypdf>=5.1
+Pillow>=11.0
+python-docx>=1.1.2
+openpyxl>=3.1.5
+httpx>=0.28
+reportlab>=4.2
+
+pytest>=8.3
+pytest-django>=4.9

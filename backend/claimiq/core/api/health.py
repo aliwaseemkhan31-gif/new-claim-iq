@@ -13,6 +13,7 @@ different situations apart:
 from __future__ import annotations
 
 import time
+from functools import lru_cache
 from typing import Any
 
 from django.conf import settings
@@ -139,5 +140,51 @@ class SystemStatusView(APIView):
                     "llm_configured": bool(ai_settings["DEFAULT_LLM_MODEL"]),
                     "embedding_configured": bool(ai_settings["DEFAULT_EMBEDDING_MODEL"]),
                 },
+            }
+        )
+
+
+@lru_cache(maxsize=1)
+def application_version() -> str:
+    """The release version, read from ``pyproject.toml``.
+
+    One source of truth: a version constant duplicated in code drifts from the
+    packaging metadata the first time someone bumps only one of them. Returns
+    ``"unknown"`` rather than raising if the file is absent, because a missing
+    version string must not take down an endpoint used in bug reports.
+    """
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(settings.BASE_DIR) / "pyproject.toml"
+    try:
+        with pyproject.open("rb") as handle:
+            return str(tomllib.load(handle)["project"]["version"])
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        return "unknown"
+
+
+class VersionView(APIView):
+    """Version metadata for the Settings page and for bug reports.
+
+    Authenticated: framework versions are of no use to an anonymous caller and
+    of some use to an attacker choosing an exploit.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request) -> Response:
+        import platform
+
+        import django
+
+        return Response(
+            {
+                "application": "claimiq-enterprise",
+                "version": application_version(),
+                "api_version": "v1",
+                "django": django.get_version(),
+                "python": platform.python_version(),
+                "hardware_profile": settings.AI_SETTINGS["HARDWARE_PROFILE"],
             }
         )
