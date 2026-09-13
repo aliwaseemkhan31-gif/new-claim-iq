@@ -1,0 +1,304 @@
+# ClaimIQ Enterprise — standalone LAN / air-gapped deployment.
+#
+# ISOLATION FROM THE LEGACY PROTOTYPE
+# Every service name, container name, network, volume and host port below is
+# namespaced `claimiq-ent…` and offset from the defaults, so this stack can run
+# alongside the legacy ClaimIQ prototype without collision:
+#
+#   legacy backend  :8000   ->  this backend  :8100
+#   legacy frontend :5173   ->  this frontend :5273 (dev) / :8080 (served)
+#   postgres        :5532   redis :6479   ollama :11534
+#
+# All host ports bind to 127.0.0.1 by default. Set BIND_ADDRESS=0.0.0.0 to
+# expose the stack on the LAN — deliberately opt-in rather than the default.
+
+name: claimiq-enterprise
+
+x-backend-env: &backend-env
+  DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+  DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+  POSTGRES_DB: ${POSTGRES_DB:-claimiq}
+  POSTGRES_USER: ${POSTGRES_USER:-claimiq}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://redis:6379/0
+  REDIS_CACHE_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  OLLAMA_BASE_URL: http://ollama:11434
+  MEDIA_ROOT: /app/var/media
+  STATIC_ROOT: /app/var/static
+  MODEL_CACHE_DIR: /models
+  HARDWARE_PROFILE: ${HARDWARE_PROFILE:-cpu}
+  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
+  SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-false}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+  CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-false}
+
+x-backend-base: &backend-base
+  build:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+    args:
+      HARDWARE_PROFILE: ${HARDWARE_PROFILE:-cpu}
+  image: claimiq-enterprise/backend:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  environment: *backend-env
+  volumes:
+    - media:/app/var/media
+    - models:/models
+  networks:
+    - claimiq-ent
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  # -------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: claimiq-ent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-claimiq}
+      POSTGRES_USER: ${POSTGRES_USER:-claimiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # Deterministic collation. A locale change between hosts silently
+      # invalidates text indexes, which is a miserable failure to diagnose.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${POSTGRES_HOST_PORT:-5532}:5432"
+    networks:
+      - claimiq-ent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-claimiq} -d ${POSTGRES_DB:-claimiq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    shm_size: 256mb
+
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: claimiq-ent-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory ${REDIS_MAXMEMORY:-512mb}
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${REDIS_HOST_PORT:-6479}:6379"
+    networks:
+      - claimiq-ent
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: claimiq-ent-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${OLLAMA_HOST_PORT:-11534}:11434"
+    networks:
+      - claimiq-ent
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # GPU is opt-in via the `gpu` profile; the default stack is CPU-only so it
+    # starts on any host. See docs/DEPLOYMENT.md.
+    profiles: ["", "cpu", "gpu"]
+
+  # -------------------------------------------------------------------------
+  backend:
+    <<: *backend-base
+    container_name: claimiq-ent-backend
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_HOST_PORT:-8100}:8000"
+    volumes:
+      - media:/app/var/media
+      - static:/app/var/static
+      - models:/models
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # -------------------------------------------------------------------------
+  # Runs migrations and seeds reference data, then exits. Everything that needs
+  # a migrated database waits for this to complete successfully, so no service
+  # ever starts against a half-migrated schema.
+  migrate:
+    <<: *backend-base
+    container_name: claimiq-ent-migrate
+    restart: "no"
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             python manage.py seed_reference_data"
+    healthcheck:
+      disable: true
+
+  # -------------------------------------------------------------------------
+  # Separate queues. Ingestion (OCR, parsing) and AI (embedding, inference) have
+  # very different memory profiles and durations; sharing one queue lets a long
+  # OCR job starve interactive AI requests.
+  worker-ingestion:
+    <<: *backend-base
+    container_name: claimiq-ent-worker-ingestion
+    command: >
+      celery -A config.celery worker
+      --queues=ingestion
+      --concurrency=${INGESTION_CONCURRENCY:-2}
+      --loglevel=INFO
+      --max-tasks-per-child=25
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config.celery inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+  worker-ai:
+    <<: *backend-base
+    container_name: claimiq-ent-worker-ai
+    command: >
+      celery -A config.celery worker
+      --queues=ai
+      --concurrency=${AI_CONCURRENCY:-1}
+      --loglevel=INFO
+      --max-tasks-per-child=25
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
+  worker-default:
+    <<: *backend-base
+    container_name: claimiq-ent-worker-default
+    command: >
+      celery -A config.celery worker
+      --queues=default
+      --concurrency=${DEFAULT_CONCURRENCY:-2}
+      --loglevel=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  beat:
+    <<: *backend-base
+    container_name: claimiq-ent-beat
+    command: >
+      celery -A config.celery beat
+      --loglevel=INFO
+      --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # -------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    image: claimiq-enterprise/frontend:${IMAGE_TAG:-latest}
+    container_name: claimiq-ent-frontend
+    restart: unless-stopped
+    networks:
+      - claimiq-ent
+    depends_on:
+      - backend
+
+  # -------------------------------------------------------------------------
+  # Single entry point. Terminates TLS, serves static and media, streams
+  # uploads to the backend without buffering whole files in memory.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: claimiq-ent-nginx
+    restart: unless-stopped
+    volumes:
+      - ./docker/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
+      - static:/srv/static:ro
+      - media:/srv/media:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_HOST_PORT:-8080}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_HOST_PORT:-8443}:443"
+    networks:
+      - claimiq-ent
+    depends_on:
+      - backend
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  claimiq-ent:
+    name: claimiq-enterprise-net
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: claimiq-ent-postgres-data
+  redis-data:
+    name: claimiq-ent-redis-data
+  ollama-data:
+    name: claimiq-ent-ollama-data
+  media:
+    name: claimiq-ent-media
+  static:
+    name: claimiq-ent-static
+  models:
+    name: claimiq-ent-models

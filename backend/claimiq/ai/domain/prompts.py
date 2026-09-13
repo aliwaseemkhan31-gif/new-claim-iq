@@ -1,0 +1,272 @@
+"""Prompt templates, versioned.
+
+Every prompt carries a version recorded alongside the response it produced. Two
+reasons this is not optional here:
+
+1. **Reproducibility.** A claim analysis may be read months later, possibly in
+   a dispute about the analysis itself. "Which prompt produced this" must be
+   answerable.
+2. **Change safety.** Prompt edits change outputs in ways tests catch only if
+   the version is pinned to the evaluation run.
+
+The prototype's prompts were f-strings in a module (`../backend/rag.py:32`),
+with no version and no record of which one produced a given answer.
+
+Templates are deliberately plain `str.format` rather than a templating engine:
+the substitutions are simple, and a template language is another thing that can
+silently swallow an error.
+
+Pure stdlib; runs on Python 3.9+. See ADR 0001.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from claimiq.core.domain.errors import ValidationError
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    """A versioned prompt.
+
+    Attributes:
+        key: Stable identifier, e.g. ``grounded_answer``.
+        version: Bumped on every substantive edit. Recorded with each response.
+        system: System prompt, if the provider supports one.
+        template: The user prompt, with ``{placeholder}`` substitutions.
+        required_variables: Names that must be supplied. Checked at render time
+            so a missing variable fails loudly rather than leaving a literal
+            ``{sources}`` in the text sent to the model.
+    """
+
+    key: str
+    version: str
+    system: str
+    template: str
+    required_variables: frozenset[str] = frozenset()
+
+    def render(self, **variables: Any) -> str:
+        missing = self.required_variables - set(variables)
+        if missing:
+            raise ValidationError(
+                f"Prompt {self.key!r} is missing required variables: "
+                f"{', '.join(sorted(missing))}",
+                details={"prompt": self.key, "missing": sorted(missing)},
+            )
+        try:
+            return self.template.format(**variables)
+        except KeyError as exc:
+            raise ValidationError(
+                f"Prompt {self.key!r} references an unsupplied placeholder: {exc}",
+                details={"prompt": self.key},
+            ) from None
+
+    @property
+    def identifier(self) -> str:
+        return f"{self.key}@{self.version}"
+
+
+# ---------------------------------------------------------------------------
+# Shared system prompt
+#
+# States the boundary and the rules that the validators independently enforce.
+# The instructions are not the mechanism — ADR 0005 is explicit that an
+# instruction without a check is a hope — but a model told the rules produces
+# fewer violations for the checks to catch.
+# ---------------------------------------------------------------------------
+
+_ANALYST_SYSTEM = """You are a construction contract analyst assisting a \
+commercial or claims professional. You are not a legal authority and your \
+output is not a determination.
+
+Rules you must follow:
+
+1. Use ONLY the numbered sources provided. If the sources do not establish \
+something, say so.
+2. Cite every factual statement with the source identifier it came from. The \
+identifier is the value after "SOURCE ID:" and nothing else — cite exactly \
+"S1", not the reference line beside it. Never cite an identifier that is not \
+in the source list.
+3. When you quote, quote exactly. Do not paraphrase inside quotation marks.
+4. Distinguish what the sources establish (fact) from what you reason from \
+them (inference) from your professional view (opinion). Where the sources are \
+insufficient, say that instead of guessing.
+5. Never invent a clause number, date, amount, party, or document.
+6. The sources may come from a specific edition of a standard form. Do not \
+apply provisions from a different edition.
+
+Answer concisely and in the register of a professional writing for a \
+colleague, not a chatbot."""
+
+
+GROUNDED_ANSWER = PromptTemplate(
+    key="grounded_answer",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"question", "sources"}),
+    template="""Answer the question using only the sources below.
+
+SOURCES
+{sources}
+
+QUESTION
+{question}
+
+Respond with JSON matching the required schema. Every finding must carry the \
+identifiers of the sources that support it. If the sources do not answer the \
+question, return a single finding with status "unknown" explaining precisely \
+what is missing.""",
+)
+
+
+CLAUSE_EXPLANATION = PromptTemplate(
+    key="clause_explanation",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"clause_number", "edition_label", "sources"}),
+    template="""Explain what {clause_number} of the {edition_label} requires.
+
+SOURCES
+{sources}
+
+Set out, where the sources establish it: who is obliged, what they must do, \
+within what period, following what trigger, and what follows from failure to \
+comply. Where the sources do not establish one of these, say so rather than \
+inferring it from general practice.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+NOTICE_COMPLIANCE_ANALYSIS = PromptTemplate(
+    key="notice_compliance",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"question", "sources", "computed_finding"}),
+    template="""Assess notice compliance for the matter below.
+
+SOURCES
+{sources}
+
+COMPUTED TIMING
+{computed_finding}
+
+The computed timing above was calculated from recorded dates, not by you. Do \
+not recalculate it or contradict its arithmetic. Your task is to explain what \
+it means contractually, identify what the sources do and do not establish, and \
+flag any assumption in it that the sources do not support.
+
+QUESTION
+{question}
+
+Respond with JSON matching the required schema.""",
+)
+
+
+ENTITLEMENT_ANALYSIS = PromptTemplate(
+    key="entitlement_analysis",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"claim_summary", "sources"}),
+    template="""Assess the contractual basis for the claim below.
+
+SOURCES
+{sources}
+
+CLAIM
+{claim_summary}
+
+Address, separately and only so far as the sources allow:
+- which provisions are capable of establishing entitlement
+- what the claiming party must show under those provisions
+- what the sources establish and what they do not
+- what a respondent could reasonably argue against the claim
+
+Do not state a conclusion on entitlement. Set out the position and its gaps; \
+the determination is the reader's.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+EVIDENCE_GAP_ANALYSIS = PromptTemplate(
+    key="evidence_gap",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"claim_summary", "sources", "required_elements"}),
+    template="""Identify what evidence is missing for the claim below.
+
+SOURCES
+{sources}
+
+CLAIM
+{claim_summary}
+
+ELEMENTS THAT MUST BE ESTABLISHED
+{required_elements}
+
+For each element, state whether the sources establish it, partly establish it, \
+or do not address it. Name the specific document that would close each gap \
+where you can, and say plainly where you cannot.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+ALL_PROMPTS: tuple[PromptTemplate, ...] = (
+    GROUNDED_ANSWER,
+    CLAUSE_EXPLANATION,
+    NOTICE_COMPLIANCE_ANALYSIS,
+    ENTITLEMENT_ANALYSIS,
+    EVIDENCE_GAP_ANALYSIS,
+)
+
+PROMPTS_BY_KEY: Mapping[str, PromptTemplate] = {p.key: p for p in ALL_PROMPTS}
+
+
+def get_prompt(key: str) -> PromptTemplate:
+    try:
+        return PROMPTS_BY_KEY[key]
+    except KeyError:
+        from claimiq.core.domain.errors import NotFoundError
+
+        raise NotFoundError(
+            f"Unknown prompt: {key!r}",
+            details={"known": sorted(PROMPTS_BY_KEY)},
+        ) from None
+
+
+def validate_prompts() -> list[str]:
+    """Check the catalogue for internal consistency.
+
+    Run as a test. Catches a template whose placeholders and declared required
+    variables have drifted apart — which would otherwise surface as a
+    ``ValidationError`` in production, or worse, as a literal ``{sources}``
+    reaching the model.
+    """
+    import re
+
+    problems: list[str] = []
+    seen_keys: set[str] = set()
+
+    for prompt in ALL_PROMPTS:
+        if prompt.key in seen_keys:
+            problems.append(f"Duplicate prompt key: {prompt.key!r}")
+        seen_keys.add(prompt.key)
+
+        placeholders = set(re.findall(r"\{(\w+)\}", prompt.template))
+        undeclared = placeholders - prompt.required_variables
+        if undeclared:
+            problems.append(
+                f"{prompt.key!r} uses undeclared placeholders: {sorted(undeclared)}"
+            )
+        unused = prompt.required_variables - placeholders
+        if unused:
+            problems.append(
+                f"{prompt.key!r} declares unused variables: {sorted(unused)}"
+            )
+        if not prompt.version:
+            problems.append(f"{prompt.key!r} has no version")
+
+    return problems

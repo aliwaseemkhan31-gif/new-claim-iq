@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claimiq-enterprise"
+version = "0.1.0"
+description = "Offline Contract & Claims Intelligence Platform"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+include = ["claimiq*", "config*"]
+
+[tool.pytest.ini_options]
+# `domain` tests are pure Python and run on any interpreter >= 3.9 with no
+# database, broker, model runtime or container. `integration` tests require the
+# full Django stack. See docs/TESTING.md.
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--strict-markers -ra"
+markers = [
+    "domain: pure-Python domain tests; no Django, no I/O",
+    "integration: requires Django, PostgreSQL and Redis",
+    "ai: requires a running local model provider",
+    "slow: long-running",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv-domain", "*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "DJ", "S"]
+ignore = [
+    "S101",  # assert: used throughout the test suite
+    "N818",  # legacy error-name suffix conventions
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B011"]
+"claimiq/*/domain/*" = ["UP006", "UP007", "UP035", "UP045"]  # ADR 0001: 3.9-compatible syntax
+
+[tool.ruff.lint.isort]
+known-first-party = ["claimiq", "config"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["migrations", ".venv-domain"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

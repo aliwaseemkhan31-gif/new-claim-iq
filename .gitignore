@@ -1,0 +1,52 @@
+# ClaimIQ Enterprise
+# Scoped to this directory. The legacy prototype's .gitignore at the repository
+# root is untouched.
+
+# --- Secrets ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+docker/nginx/certs/
+*.pem
+*.key
+*.crt
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-*/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Django runtime --------------------------------------------------------
+backend/var/
+backend/media/
+backend/staticfiles/
+*.sqlite3
+
+# --- Node ------------------------------------------------------------------
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+npm-debug.log*
+
+# --- Models and data -------------------------------------------------------
+# Model weights are large and are provisioned per deployment, never committed.
+models/
+*.gguf
+*.safetensors
+
+# --- Editors / OS ----------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
