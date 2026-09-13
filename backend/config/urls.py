@@ -16,14 +16,16 @@ from django.urls import include, path
 # startup — every request, not just that route — which is how this list looked
 # before it was first run against a real Django.
 #
-# Outstanding: search/, claims/, correspondence/, evidence/, reports/, admin/.
-# The frontend's api/ modules already target these paths, so adding each one is
-# wiring a viewset to a path the client is already calling.
+# Outstanding: search/, correspondence/, reports/, admin/. The frontend's api/
+# modules already target these paths, so adding each one is wiring a viewset to
+# a path the client is already calling.
 api_v1 = [
     path("health/", include("claimiq.core.api.health_urls")),
     path("auth/", include("claimiq.accounts.api.auth_urls")),
     path("projects/", include("claimiq.projects.api.urls")),
     path("documents/", include("claimiq.documents.api.urls")),
+    path("claims/", include("claimiq.claims.api.urls")),
+    path("evidence/", include("claimiq.claims.api.evidence_urls")),
     path("ai/", include("claimiq.ai.api.urls")),
 ]
 
