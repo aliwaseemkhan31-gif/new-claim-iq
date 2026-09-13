@@ -1,8 +1,8 @@
 """Import from the legacy ClaimIQ prototype.
 
-The prototype is a **read-only reference**. Nothing in this module writes to,
-moves or modifies anything under it; every function takes a path and returns
-parsed data.
+The prototype is a **read-only reference** and lives outside this repository.
+Nothing in this module writes to, moves or modifies anything under it; every
+function takes a path and returns parsed data, so the caller owns locating it.
 
 Three artefacts are worth bringing across:
 

@@ -1,13 +1,17 @@
 """Tests for legacy ClaimIQ import.
 
-Includes tests that parse the **real** prototype files at the repository root.
+Includes tests that parse the **real** prototype files, wherever they are.
 Those are read-only reads: nothing here writes to, moves or modifies anything
-under the legacy application. They are skipped when the legacy tree is absent,
-so the suite still passes in a checkout that does not contain it.
+under the legacy application, and one test asserts it by comparing mtimes.
+
+The prototype lives outside this repository, so its location is resolved at
+import time (see :func:`_find_legacy_root`) and the tests that need it skip
+when it is absent — which is the normal case in CI.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -24,11 +28,45 @@ from claimiq.imports.domain.legacy import (
     validate_skeleton,
 )
 
-# tests/domain -> tests -> backend -> claimiq-enterprise -> repository root
-LEGACY_ROOT = Path(__file__).resolve().parents[4] / "backend"
-SKELETON_1987 = LEGACY_ROOT / "fidic_1987_skeleton.py"
-SKELETON_2017 = LEGACY_ROOT / "fidic_2017_skeleton.py"
-LEGACY_DB = LEGACY_ROOT / "db.json"
+
+def _find_legacy_root() -> Path | None:
+    """Locate the legacy prototype, which now lives outside this repository.
+
+    ClaimIQ Enterprise began as a subdirectory of the prototype's repository,
+    where the prototype was reliably at a fixed relative path. It is now a
+    standalone repository, so that assumption no longer holds and the location
+    is deployment-specific.
+
+    Resolution order: an explicit ``CLAIMIQ_LEGACY_ROOT`` override, then the
+    conventional sibling layouts. Returns None when it cannot be found, and the
+    tests that need it skip — the suite must stay green in a checkout that has
+    no access to the prototype at all, which is the normal case for CI.
+    """
+    override = os.environ.get("CLAIMIQ_LEGACY_ROOT")
+    if override:
+        candidate = Path(override).expanduser().resolve()
+        return candidate if (candidate / "fidic_1987_skeleton.py").is_file() else None
+
+    here = Path(__file__).resolve()
+    # backend/tests/domain -> backend -> repo root -> parent of the repo
+    repo_root = here.parents[3]
+    candidates = [
+        # Nested layout, as it was originally.
+        repo_root.parent / "backend",
+        # Sibling checkouts: <work>/Claim-IQ/backend next to <work>/claimiq-enterprise
+        repo_root.parent / "Claim-IQ" / "backend",
+        repo_root.parent / "claim-iq" / "backend",
+    ]
+    for candidate in candidates:
+        if (candidate / "fidic_1987_skeleton.py").is_file():
+            return candidate
+    return None
+
+
+LEGACY_ROOT = _find_legacy_root()
+SKELETON_1987 = (LEGACY_ROOT / "fidic_1987_skeleton.py") if LEGACY_ROOT else Path("missing")
+SKELETON_2017 = (LEGACY_ROOT / "fidic_2017_skeleton.py") if LEGACY_ROOT else Path("missing")
+LEGACY_DB = (LEGACY_ROOT / "db.json") if LEGACY_ROOT else Path("missing")
 
 requires_legacy = pytest.mark.skipif(
     not SKELETON_1987.is_file(), reason="legacy prototype tree not present"

@@ -1,94 +1,89 @@
-name: ClaimIQ Enterprise CI
+name: CI
 
-# Scoped to this directory so the legacy prototype at the repository root is
-# never built or tested by this pipeline.
-#
-# NOTE ON LOCATION. GitHub Actions only discovers workflows in `.github/
-# workflows/` at the *repository* root. This file lives under
-# `claimiq-enterprise/` deliberately, to keep the new application fully
-# self-contained and avoid adding anything to the shared repository root while
-# the legacy prototype lives there. To activate it, either copy this file to
-# `<repo-root>/.github/workflows/claimiq-enterprise-ci.yml`, or split
-# `claimiq-enterprise/` into its own repository — at which point the paths
-# below become root-relative and the `working-directory` prefixes can be
-# dropped. Until then this pipeline is defined but not running.
+# ClaimIQ Enterprise is now its own repository, so this workflow lives at the
+# repository root where GitHub Actions discovers it, and every path is
+# root-relative. It previously sat inside a nested directory with a
+# `working-directory` prefix on every step; that prefix is gone.
 on:
   push:
-    paths: ["claimiq-enterprise/**", ".github/workflows/ci.yml"]
+    branches: ["**"]
   pull_request:
-    paths: ["claimiq-enterprise/**"]
   workflow_dispatch:
-
-defaults:
-  run:
-    working-directory: claimiq-enterprise
 
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
 
 jobs:
-  # The fast gate. Pure Python, no services, no database — this is the job that
-  # should fail first when something is wrong, and it takes seconds.
+  # The fast gate. Pure Python, no services, no database — this should fail
+  # first when something is wrong, and it takes under two seconds.
   domain-tests:
     name: Domain tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install pytest pytest-cov
-      - name: Run domain suite
-        working-directory: claimiq-enterprise/backend
-        run: pytest tests/domain -q --cov=claimiq --cov-report=term-missing
+      - run: pytest tests/domain -q --cov=claimiq --cov-report=term-missing
 
-  # Guards ADR 0001: the domain layer must remain importable on 3.9. If a
-  # domain module gains a Django import or 3.10+ syntax, this fails — which is
-  # what makes the layering rule self-policing rather than a review convention.
+  # Guards ADR 0001: the domain layer must stay importable on 3.9. If a domain
+  # module gains a Django import or 3.10+ syntax this fails, which is what
+  # makes the layering rule self-policing rather than a review convention.
   domain-python39:
     name: Domain layer runs on Python 3.9
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
       - run: pip install pytest
-      - working-directory: claimiq-enterprise/backend
-        run: pytest tests/domain -q
+      - run: pytest tests/domain -q
 
   lint:
     name: Lint and format
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install ruff
-      - working-directory: claimiq-enterprise/backend
-        run: |
-          ruff check .
-          ruff format --check .
+      - run: ruff check .
+      - run: ruff format --check .
 
   types:
     name: Type check
     runs-on: ubuntu-latest
-    continue-on-error: true  # advisory until annotation coverage is complete
+    continue-on-error: true # advisory until annotation coverage is complete
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - working-directory: claimiq-enterprise/backend
-        run: |
-          pip install -r requirements-dev.txt
-          mypy claimiq config
+      - run: pip install -r requirements-dev.txt
+      - run: mypy claimiq config
 
   integration-tests:
     name: Integration tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -123,40 +118,45 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libmagic1 poppler-utils
-      - working-directory: claimiq-enterprise/backend
-        run: pip install -r requirements-dev.txt
-      - name: Enable pgvector
+      - run: pip install -r requirements-dev.txt
+      - name: Enable extensions
+        # Also in template1, because Django builds its test database from it
+        # and every vector column would otherwise fail with "type vector does
+        # not exist".
         run: |
-          PGPASSWORD=ci-only-password psql -h localhost -U claimiq -d claimiq_test \
-            -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS unaccent;"
+          for db in claimiq_test template1; do
+            PGPASSWORD=ci-only-password psql -h localhost -U claimiq -d "$db" \
+              -c "CREATE EXTENSION IF NOT EXISTS vector;
+                  CREATE EXTENSION IF NOT EXISTS pg_trgm;
+                  CREATE EXTENSION IF NOT EXISTS unaccent;"
+          done
+        working-directory: .
       - name: Check for missing migrations
-        working-directory: claimiq-enterprise/backend
         run: python manage.py makemigrations --check --dry-run
       - name: Migrate
-        working-directory: claimiq-enterprise/backend
         run: python manage.py migrate --noinput
+      - name: Validate reference data
+        run: python manage.py seed_reference_data --check-only
       - name: Run full suite
-        working-directory: claimiq-enterprise/backend
         run: pytest tests/ -q
 
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: claimiq-enterprise/frontend/package-lock.json
-      - working-directory: claimiq-enterprise/frontend
-        run: npm ci
-      - working-directory: claimiq-enterprise/frontend
-        run: npm run lint
-      - working-directory: claimiq-enterprise/frontend
-        run: npm run test -- --run
-      - working-directory: claimiq-enterprise/frontend
-        run: npm run build
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:run
+      - run: npm run build
 
   security:
     name: Security checks
@@ -168,15 +168,15 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install pip-audit bandit
       - name: Dependency audit
-        working-directory: claimiq-enterprise/backend
-        run: pip-audit -r requirements.txt --ignore-vuln GHSA-none || true
+        working-directory: backend
+        run: pip-audit -r requirements.txt || true
       - name: Static security scan
-        working-directory: claimiq-enterprise/backend
+        working-directory: backend
         run: bandit -r claimiq config -ll -x tests
       - name: Fail if a real secret was committed
+        # .env.example is a template with empty values and is expected.
         run: |
-          # .env.example is a template with empty values and is expected.
-          if git ls-files 'claimiq-enterprise/**/.env' | grep -q .; then
+          if git ls-files | grep -E '(^|/)\.env$' ; then
             echo "A .env file is tracked. Secrets must never be committed."
             exit 1
           fi
@@ -191,8 +191,8 @@ jobs:
       - name: Build backend (CPU profile)
         uses: docker/build-push-action@v6
         with:
-          context: claimiq-enterprise
-          file: claimiq-enterprise/docker/backend.Dockerfile
+          context: .
+          file: docker/backend.Dockerfile
           build-args: HARDWARE_PROFILE=cpu
           push: false
           cache-from: type=gha
@@ -200,8 +200,8 @@ jobs:
       - name: Build frontend
         uses: docker/build-push-action@v6
         with:
-          context: claimiq-enterprise
-          file: claimiq-enterprise/docker/frontend.Dockerfile
+          context: .
+          file: docker/frontend.Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -211,8 +211,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate compose file
-        env:
+      - env:
           DJANGO_SECRET_KEY: validate-only
           POSTGRES_PASSWORD: validate-only
         run: docker compose config --quiet

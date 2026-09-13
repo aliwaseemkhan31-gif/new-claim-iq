@@ -13,9 +13,18 @@
 
 ## 1. Current-System Assessment (legacy ClaimIQ)
 
-The legacy prototype lives at the repository root (`../backend`, `../frontend`)
-and is **read-only** for the purposes of this project. It is not modified,
-migrated in place, or refactored. It is a reference implementation.
+The legacy prototype is **read-only** for the purposes of this project. It is
+not modified, migrated in place, or refactored. It is a reference
+implementation.
+
+> **On the `../backend/...` paths in this document.** ClaimIQ Enterprise began
+> as a subdirectory of the prototype's repository, where those relative paths
+> resolved. It is now a standalone repository and the prototype is a separate
+> checkout elsewhere. Every `../backend/...` or `../frontend/...` reference
+> below is therefore a **citation into the prototype's source**, identifying
+> where a defect lived — not a path that resolves from here. The import tooling
+> locates the prototype explicitly rather than assuming a relative position;
+> see `MIGRATION.md` and the `CLAIMIQ_LEGACY_ROOT` override.
 
 ### 1.1 What the prototype does well (domain knowledge worth preserving)
 

@@ -5,12 +5,19 @@ construction projects: contract intelligence, claims analysis, document
 intelligence, evidence management and AI-assisted analysis that is always
 traceable back to source documents.
 
-> **Relationship to the legacy prototype.** The ClaimIQ prototype at the
-> repository root (`../backend`, `../frontend`) is a **read-only reference**.
-> It is not modified, migrated in place, or refactored by this project, and it
-> remains independently runnable. This application is architecturally
-> independent; where the prototype's data is worth keeping, it is brought
-> across by explicit import tooling (`docs/MIGRATION.md`).
+> **Relationship to the legacy prototype.** The ClaimIQ prototype is a
+> **read-only reference**, kept in its own separate checkout. It is not
+> modified, migrated in place, or refactored by this project, and it remains
+> independently runnable. This application is architecturally independent;
+> where the prototype's data is worth keeping, it is brought across by explicit
+> import tooling (`docs/MIGRATION.md`).
+>
+> Paths written as `../backend/...` throughout the documentation are citations
+> into the prototype's source, identifying where a defect lived. They date from
+> when this project was a subdirectory of that repository and no longer resolve
+> from here. Set `CLAIMIQ_LEGACY_ROOT` to point the import tooling and its
+> tests at your prototype checkout; without it they look in the conventional
+> sibling locations and skip cleanly if absent.
 
 ---
 
