@@ -219,6 +219,27 @@ REQUIRED_ELEMENTS: Mapping[str, tuple[RequiredElement, ...]] = {
 }
 
 
+#: ClaimIssue categories whose names differ from the element they address.
+#:
+#: Evidence is tagged by attaching it to a claim issue, and issue categories were
+#: named for the analysis ("notice_compliance", "entitlement") while elements
+#: were named for what must be shown ("notice", "responsibility"). Without this
+#: mapping, evidence filed under either category matched no element and was
+#: reported as unmatched — so a notice that was on the record still showed as a
+#: missing notice.
+ISSUE_CATEGORY_TO_ELEMENT: Mapping[str, str] = {
+    "notice_compliance": "notice",
+    "entitlement": "responsibility",
+}
+
+
+def element_code_for_issue_category(category: str | None) -> str | None:
+    """The element code that evidence attached to an issue category addresses."""
+    if not category:
+        return None
+    return ISSUE_CATEGORY_TO_ELEMENT.get(category, category)
+
+
 def elements_for(claim_type: str) -> tuple[RequiredElement, ...]:
     """Required elements for a claim type, falling back to the common set."""
     return REQUIRED_ELEMENTS.get(claim_type, REQUIRED_ELEMENTS["other"])

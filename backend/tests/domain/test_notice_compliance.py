@@ -19,6 +19,8 @@ from claimiq.claims.domain.notice_compliance import (
     add_days,
     assess_notice,
     count_days,
+    given_under,
+    recipient_label,
     requirements_for_edition,
 )
 
@@ -41,6 +43,81 @@ def notice(
         recipient=recipient,
         is_confirmed_notice=confirmed,
     )
+
+
+# ---------------------------------------------------------------------------
+# Which provision a notice is given under
+# ---------------------------------------------------------------------------
+
+
+def _under(clause: str, sent: date, title: str = "Notice of Claim.pdf") -> NoticeEvent:
+    return NoticeEvent(
+        document_id=f"doc-{clause}",
+        document_title=title,
+        sent_date=sent,
+        received_date=sent,
+        recipient="the Engineer",
+        is_confirmed_notice=True,
+        clause_number=clause,
+    )
+
+
+def test_notice_under_another_provision_does_not_count() -> None:
+    """Regression: a Notice of Claim was accepted as a fully detailed claim."""
+    detailed = next(r for r in requirements_for_edition("red-book-2017") if r.clause_number == "20.2.4")
+    finding = assess_notice(detailed, awareness_date=AWARE, notices=[_under("20.2.1", date(2026, 3, 18))])
+
+    assert finding.status is ComplianceStatus.NOT_GIVEN
+    assert finding.notice is None
+    assert any("other provisions" in w for w in finding.warnings)
+
+
+def test_notice_under_its_own_provision_counts() -> None:
+    finding = assess_notice(
+        FIDIC_2017_NOTICE_OF_CLAIM,
+        awareness_date=AWARE,
+        notices=[_under("20.2.4", date(2026, 3, 10)), _under("20.2.1", date(2026, 3, 18))],
+    )
+    assert finding.status is ComplianceStatus.COMPLIANT
+    assert finding.notice.clause_number == "20.2.1", "the earlier 20.2.4 document is not used"
+    assert finding.days_used == 17
+
+
+def test_parent_clause_is_not_a_prefix_match() -> None:
+    assert not given_under(_under("20.2", date(2026, 3, 18)), FIDIC_2017_NOTICE_OF_CLAIM)
+    assert not given_under(_under("20.2.10", date(2026, 3, 18)), FIDIC_2017_NOTICE_OF_CLAIM)
+    assert given_under(_under(" 20.2.1 ", date(2026, 3, 18)), FIDIC_2017_NOTICE_OF_CLAIM)
+
+
+def test_unattributed_notice_is_assessed_with_a_warning() -> None:
+    finding = assess_notice(
+        FIDIC_2017_NOTICE_OF_CLAIM, awareness_date=AWARE, notices=[_under("", date(2026, 3, 18))]
+    )
+    assert finding.status is ComplianceStatus.COMPLIANT
+    assert any("not recorded as given under any provision" in w for w in finding.warnings)
+
+
+@pytest.mark.parametrize(
+    ("name", "role", "expected"),
+    [
+        ("Oversight Engineering", "engineer", "Oversight Engineering (the Engineer)"),
+        ("Supplier Ltd", "supplier", "Supplier Ltd"),
+        ("", "engineer", "the Engineer"),
+        ("", None, ""),
+    ],
+)
+def test_recipient_label(name: str, role: str | None, expected: str) -> None:
+    assert recipient_label(name, role) == expected
+
+
+def test_role_label_satisfies_recipient_check() -> None:
+    event = NoticeEvent(
+        document_id="d", document_title="Notice", sent_date=date(2026, 3, 18),
+        received_date=date(2026, 3, 18), is_confirmed_notice=True, clause_number="20.2.1",
+        recipient=recipient_label("Oversight Engineering", "engineer"),
+    )
+    finding = assess_notice(FIDIC_2017_NOTICE_OF_CLAIM, awareness_date=AWARE, notices=[event])
+    assert not any("recipient" in w for w in finding.warnings)
 
 
 # ---------------------------------------------------------------------------

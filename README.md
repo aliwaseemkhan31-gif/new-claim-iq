@@ -29,49 +29,41 @@ has not been run.
 
 | Area | Status | Verification |
 | --- | --- | --- |
-| Architecture, ADRs, domain design | **Done** | `docs/ARCHITECTURE.md`, `docs/adr/` (7 ADRs) |
-| Domain layer — clause detection, chunking, KB validation, grounding, retrieval scope + fusion, query understanding, permissions, taxonomy, editions, upload safety, model registry, notice compliance, legacy import, pipeline state machine, quality scoring | **Done** | **471 tests passing** on both Python 3.9 and 3.12 |
-| Ingestion pipeline — stage machine, executors, extraction/OCR providers, job persistence, Celery tasks | **Wired (executors not runtime-verified)** | State machine and quality scoring tested; executors need a database |
-| Hybrid retrieval — query understanding, three retrievers, fusion, rerank, assembly, edition verification | **Wired (SQL not executed)** | Orchestration tested with mocked repositories (17 tests); SQL needs pgvector |
-| Django runtime — system checks, migrations | **Verified** | `manage.py check` clean; migrations generated for 5 apps |
-| Vue frontend — design system, app shell, router, API client, stores, core components, views | **Done** | **84 tests passing**, lint clean, build succeeds |
-| Django project, settings, error envelope, structured logging, health checks | **Done** | Loads and passes `manage.py check` on Python 3.12 |
-| Data model — accounts, projects, documents, ingestion, knowledge | **Done (migrations generated, not applied)** | Applying needs pgvector, absent on this host |
-| Docker, compose, nginx, Postgres init, CI | **Authored (not run)** | Docker is not installed on the build host |
-| API endpoint layer, claims engine, reports, AI answer generation | Not started | |
+| Architecture, ADRs, domain design | **Done** | `docs/ARCHITECTURE.md`, `docs/adr/` |
+| Domain layer — clause detection, chunking, KB validation, grounding, retrieval scope + fusion, query understanding, permissions, editions, notice compliance, evidence gaps, chronology, pipeline state machine, quality scoring, analysis strands, confidence rules, review resolution | **Done** | **683 tests passing** on Python 3.9 |
+| Data model and migrations — accounts, projects, documents, ingestion, knowledge, claims, correspondence, analysis | **Verified** | Applied to PostgreSQL 17 + pgvector 0.8.0; HNSW indexes present |
+| Hybrid retrieval — clause-exact, lexical, vector, fusion, edition verification | **Verified** | SQL executed against pgvector; edition isolation checked by SQL |
+| Grounded answering (Phase 4) — Ollama LLM + embeddings, closed-world citations, quotation checks | **Verified** | Live against `qwen2.5:3b-instruct` and `bge-m3` |
+| Claims intelligence (Phase 5) — claims, issues, evidence, notices, compliance, chronology | **Verified** | API and computations run against the real database |
+| Claim analysis engine (Phase 6) — seven strands, confidence caps, immutable findings, append-only review | **Verified** | See below |
+| Ingestion pipeline — extraction, OCR, structure, chunk, index | **Wired** | `EMBED` and `EXTRACT_TABLES` are not implemented and are reported as skipped, never as done |
+| Vue frontend — shell, auth, dashboard, API client | **Done** | 84 tests; claims and AI analysis screens still show "not available" rather than a mock-up |
+| Docker, compose, nginx, CI | **Authored (not run)** | Docker is not installed on the build host |
+| Reports, correspondence intelligence UI, notifications | Not started | Phases 7–8 |
 
 ### What has genuinely been verified
 
 ```
-471 passed in 0.62s      # backend/tests/domain on Python 3.9  (ADR 0001 guard)
-471 passed in 1.07s      # backend/tests/domain on Python 3.12
- 17 passed               # backend/tests/integration — Django, mocked repositories
- 84 passed               # frontend — vitest, jsdom
-                         # manage.py check: no issues
-                         # migrations generated: accounts, projects, documents,
-                         #   ingestion, knowledge
-                         # frontend lint clean, production build succeeds
+683 passed               # backend/tests/domain on Python 3.9  (ADR 0001 guard)
+ 73 passed               # backend/tests/integration — Django, no database
+                         # manage.py check: no issues; all migrations applied
+                         # Phase 6 live: full claim analysis via the HTTP API
+                         #   against PostgreSQL + pgvector and Ollama
+                         #   (qwen2.5:3b-instruct, bge-m3) — 7 strands, 80s on
+                         #   CPU, citations resolved, review recorded. Sources
+                         #   were 5 fixture passages written for the test.
 ```
 
 ### What has *not* been verified, and why
 
-- **No SQL has been executed.** The host runs PostgreSQL 17, but without the
-  pgvector extension — installing it writes to Program Files and needs
-  elevation this session does not have. So migrations are generated but never
-  applied, and every query in `search/repositories.py` is unverified against a
-  real database.
-- **No AI provider has been called.** Ollama is not installed here, so the
-  Ollama LLM and embedding providers are authored and unexercised.
 - **The Docker stack has never been started.** Docker is not installed on the
-  build host. The compose file and Dockerfiles are authored against the
-  documented behaviour of the images they use, and are unverified.
-- **Retrieval quality is unmeasured.** The evaluation harness in `docs/RAG.md`
-  §6 does not exist. Unit tests show the mechanism is correct; they say nothing
-  about whether the right clause comes back for a real question.
-
-To unblock the first two: install pgvector for PostgreSQL 17 (needs an elevated
-shell), or install Docker Desktop and use the bundled `pgvector/pgvector:pg16`
-image.
+  build host. The compose file and Dockerfiles are authored and unverified.
+- **Retrieval and analysis quality are unmeasured.** The evaluation harness in
+  `docs/RAG.md` §6 does not exist. Tests show the mechanism is correct; they say
+  nothing about whether a 3B model's analysis of a real claim is any good. Every
+  AI finding is therefore unreviewed until a person reviews it.
+- **No real contract has been ingested on this host.** Live checks use short
+  fixture passages written for the test, not the contract text.
 
 This distinction is deliberate and is maintained throughout the documentation.
 See `docs/ARCHITECTURE.md` §4.

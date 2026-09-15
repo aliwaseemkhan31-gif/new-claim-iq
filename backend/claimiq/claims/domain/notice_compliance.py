@@ -104,6 +104,11 @@ class NoticeEvent:
     than ordinary correspondence. Unconfirmed candidates are still evaluated,
     and flagged."""
 
+    clause_number: str = ""
+    """The provision the notice is given under. A notice under one provision
+    does not satisfy another: a Notice of Claim is not a fully detailed claim.
+    Blank means not recorded, and is evaluated with a warning."""
+
     @property
     def effective_date(self) -> date | None:
         """The date used for the calculation.
@@ -163,6 +168,38 @@ class ComplianceFinding:
                 f"{self.requirement.period_days}-day period expired.{bar}"
             )
         return f"{clause}: no notice required."
+
+
+def given_under(notice: NoticeEvent, requirement: NoticeRequirement) -> bool:
+    """Whether ``notice`` can count towards ``requirement``.
+
+    Exact clause match, or no clause recorded (assessed, with a warning). A
+    notice under a parent or sibling provision does not count: which provision
+    a notice satisfies is a question for a person, not a prefix match.
+    """
+    clause = notice.clause_number.strip()
+    return not clause or clause == requirement.clause_number
+
+
+_PARTY_ROLE_LABELS = {
+    "employer": "the Employer",
+    "contractor": "the Contractor",
+    "engineer": "the Engineer",
+}
+
+
+def recipient_label(name: str, role: str | None) -> str:
+    """How a notice's recipient is described for the compliance check.
+
+    A requirement names its recipient by contractual role ("the Engineer");
+    correspondence names a firm ("Oversight Engineering"). Matching the firm
+    against the role would flag every correctly addressed notice, so the
+    party's role travels with its name.
+    """
+    label = _PARTY_ROLE_LABELS.get(role or "")
+    if name and label:
+        return f"{name} ({label})"
+    return name or label or ""
 
 
 DEFAULT_WEEKEND = frozenset({5, 6})  # Saturday, Sunday
@@ -291,8 +328,16 @@ def assess_notice(
             "than the true contractual date."
         )
 
-    candidates = [n for n in notices if n.effective_date is not None]
+    applicable = [n for n in notices if given_under(n, requirement)]
+    other_provisions = len(notices) - len(applicable)
+    candidates = [n for n in applicable if n.effective_date is not None]
     if not candidates:
+        if other_provisions:
+            warnings.append(
+                f"{other_provisions} notice(s) recorded under other provisions "
+                f"were not counted. A notice under one provision does not "
+                f"satisfy Clause {requirement.clause_number}."
+            )
         return ComplianceFinding(
             status=ComplianceStatus.NOT_GIVEN,
             requirement=requirement,
@@ -312,6 +357,13 @@ def assess_notice(
     notice = min(candidates, key=lambda n: n.effective_date)  # type: ignore[arg-type]
     effective = notice.effective_date
     assert effective is not None  # guaranteed by the filter above
+
+    if not notice.clause_number.strip():
+        warnings.append(
+            f"{notice.document_title!r} is not recorded as given under any "
+            f"provision. It has been assessed against Clause "
+            f"{requirement.clause_number}, which may not be what it was given under."
+        )
 
     if notice.received_date is None:
         assumptions.append(

@@ -164,9 +164,22 @@ Respond with JSON matching the required schema.""",
 )
 
 
+#: Shared instruction for every claim-analysis prompt. The CLAIM block is the
+#: claimant's own account, rendered from the claim record, and it is not a
+#: source: it carries no identifier and cannot be cited. A model that restates
+#: "the claim is for USD 125,000" as a fact is asserting something uncited, and
+#: grounding validation rejects the whole answer. Saying so up front avoids
+#: burning the one corrective attempt on it.
+_CLAIM_IS_NOT_EVIDENCE = """The CLAIM section is what the claimant asserts, \
+taken from the claim record. It is not evidence and it has no source \
+identifier. Do not restate it as a finding. Every finding must rest on the \
+SOURCES, and anything the SOURCES do not establish must be reported as unknown."""
+
+
 ENTITLEMENT_ANALYSIS = PromptTemplate(
     key="entitlement_analysis",
-    version="1.0.0",
+    # 1.1.0: added the claim-is-not-evidence instruction.
+    version="1.1.0",
     system=_ANALYST_SYSTEM,
     required_variables=frozenset({"claim_summary", "sources"}),
     template="""Assess the contractual basis for the claim below.
@@ -177,6 +190,10 @@ SOURCES
 CLAIM
 {claim_summary}
 
+"""
+    + _CLAIM_IS_NOT_EVIDENCE
+    + """
+
 Address, separately and only so far as the sources allow:
 - which provisions are capable of establishing entitlement
 - what the claiming party must show under those provisions
@@ -185,6 +202,127 @@ Address, separately and only so far as the sources allow:
 
 Do not state a conclusion on entitlement. Set out the position and its gaps; \
 the determination is the reader's.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+CAUSATION_ANALYSIS = PromptTemplate(
+    key="causation_analysis",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"claim_summary", "sources"}),
+    template="""Assess causation for the claim below.
+
+SOURCES
+{sources}
+
+CLAIM
+{claim_summary}
+
+"""
+    + _CLAIM_IS_NOT_EVIDENCE
+    + """
+
+Address, separately and only so far as the sources allow:
+- the event said to have caused the effect, and what the sources establish \
+about it occurring
+- what the sources establish about the link between that event and the effect \
+claimed
+- other causes the sources mention, including concurrent delay or the \
+claimant's own acts or omissions
+
+Showing that an event and an effect both occurred does not show that one caused \
+the other. Do not state a conclusion on causation.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+TIME_IMPACT_ANALYSIS = PromptTemplate(
+    key="time_impact_analysis",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"claim_summary", "sources"}),
+    template="""Assess the time impact of the claim below.
+
+SOURCES
+{sources}
+
+CLAIM
+{claim_summary}
+
+"""
+    + _CLAIM_IS_NOT_EVIDENCE
+    + """
+
+Address, separately and only so far as the sources allow:
+- the provisions governing extension of the time for completion
+- what the sources establish about the activities affected and whether they \
+were critical to completion
+- what the sources establish about the length of the delay
+
+Never state a number of days the sources do not contain. Do not state a \
+conclusion on the extension due.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+QUANTUM_ANALYSIS = PromptTemplate(
+    key="quantum_analysis",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"claim_summary", "sources"}),
+    template="""Assess the quantum of the claim below.
+
+SOURCES
+{sources}
+
+CLAIM
+{claim_summary}
+
+"""
+    + _CLAIM_IS_NOT_EVIDENCE
+    + """
+
+Address, separately and only so far as the sources allow:
+- the provisions governing valuation and payment
+- which costs the sources show were actually incurred
+- which parts of the amount claimed the sources do not support
+
+Never compute, total or restate an amount the sources do not contain. Do not \
+state a conclusion on the amount due.
+
+Respond with JSON matching the required schema.""",
+)
+
+
+COUNTERARGUMENTS_ANALYSIS = PromptTemplate(
+    key="counterarguments_analysis",
+    version="1.0.0",
+    system=_ANALYST_SYSTEM,
+    required_variables=frozenset({"claim_summary", "sources"}),
+    template="""Identify the arguments a respondent could raise against the \
+claim below.
+
+SOURCES
+{sources}
+
+CLAIM
+{claim_summary}
+
+"""
+    + _CLAIM_IS_NOT_EVIDENCE
+    + """
+
+Consider contractual arguments (a condition not met, a time bar, a risk the \
+claimant bears, an exclusion) and factual ones (a source that contradicts the \
+claim, or fails to support a step it depends on).
+
+Include an argument only if a source supports it, and cite that source. An \
+argument with no support in the sources is speculation and must be left out. \
+Mark arguments as inference, not fact.
 
 Respond with JSON matching the required schema.""",
 )
@@ -219,6 +357,10 @@ ALL_PROMPTS: tuple[PromptTemplate, ...] = (
     CLAUSE_EXPLANATION,
     NOTICE_COMPLIANCE_ANALYSIS,
     ENTITLEMENT_ANALYSIS,
+    CAUSATION_ANALYSIS,
+    TIME_IMPACT_ANALYSIS,
+    QUANTUM_ANALYSIS,
+    COUNTERARGUMENTS_ANALYSIS,
     EVIDENCE_GAP_ANALYSIS,
 )
 

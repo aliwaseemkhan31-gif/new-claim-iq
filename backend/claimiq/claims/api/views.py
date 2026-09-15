@@ -22,6 +22,7 @@ from claimiq.claims.domain.evidence_gaps import (
     EvidenceItem,
     Relevance,
     analyse_gaps,
+    element_code_for_issue_category,
 )
 from claimiq.claims.models import (
     AssessmentOutcome,
@@ -234,7 +235,9 @@ class ClaimViewSet(viewsets.ModelViewSet):
             EvidenceItem(
                 evidence_id=str(e.id),
                 title=e.title,
-                element_code=(e.issue.category if e.issue else None),
+                element_code=element_code_for_issue_category(
+                    e.issue.category if e.issue else None
+                ),
                 relevance=_relevance(e.relevance),
                 weight=e.weight,
                 document_type=(e.document.document_type if e.document else None),
@@ -283,6 +286,7 @@ class ClaimViewSet(viewsets.ModelViewSet):
         from claimiq.claims.domain.notice_compliance import (
             NoticeEvent,
             assess_notice,
+            recipient_label,
             requirements_for_edition,
         )
 
@@ -322,11 +326,14 @@ class ClaimViewSet(viewsets.ModelViewSet):
                 sent_date=n.correspondence.sent_date,
                 received_date=n.correspondence.received_date,
                 recipient=(
-                    n.correspondence.recipient.name
+                    recipient_label(
+                        n.correspondence.recipient.name, n.correspondence.recipient.role
+                    )
                     if n.correspondence.recipient
                     else n.correspondence.recipient_raw
                 ),
                 is_confirmed_notice=n.is_confirmed_notice,
+                clause_number=n.clause_number,
             )
             for n in claim.notices.select_related(
                 "correspondence__recipient", "correspondence__document"
