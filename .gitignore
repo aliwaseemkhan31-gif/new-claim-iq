@@ -50,3 +50,6 @@ models/
 .DS_Store
 Thumbs.db
 *.swp
+
+# --- Docs / Resources ----------------------------------------------------------
+docs/helping docs and resources
