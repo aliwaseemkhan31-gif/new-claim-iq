@@ -193,12 +193,15 @@ watch(() => props.page, (value) => load(clampPage(value, pageCount.value)), { im
 </template>
 
 <style scoped>
+/*
+ * The viewer sizes itself and lets the page scroll. Filling the parent made
+ * the flex container squeeze the panes while their content kept its height,
+ * so the page image overflowed and overlapped the clause list beneath it.
+ */
 .viewer {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  height: 100%;
-  min-height: 0;
 }
 
 .viewer__bar {
@@ -227,8 +230,7 @@ watch(() => props.page, (value) => load(clampPage(value, pageCount.value)), { im
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-3);
-  flex: 1 1 auto;
-  min-height: 0;
+  align-items: start;
 }
 
 @media (max-width: 1000px) {
@@ -237,11 +239,25 @@ watch(() => props.page, (value) => load(clampPage(value, pageCount.value)), { im
   }
 }
 
+/*
+ * An explicit height rather than filling the parent: the viewer sits inside a
+ * scrolling page, where a percentage height collapses to whatever the content
+ * above leaves behind — which squashed the page image to a sliver.
+ */
 .viewer__pane {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  height: calc(100vh - 230px);
+  min-height: 460px;
   overflow: auto;
+}
+
+@media (max-width: 1000px) {
+  .viewer__pane {
+    height: auto;
+    max-height: 75vh;
+    min-height: 380px;
+  }
 }
 
 .viewer__pad {

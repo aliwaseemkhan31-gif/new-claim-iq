@@ -499,6 +499,31 @@ class PipelineState:
             )
         return state
 
+    def stage_detail(self) -> str:
+        """Progress within the running stage, in its own units.
+
+        ``progress_percent`` counts whole stages, so OCR of a few hundred
+        scanned pages sits on one number for the length of the run and reads as
+        a hang. The checkpoints already hold the counters that make it legible;
+        this reports them rather than inventing a finer percentage.
+
+        Returns an empty string when the running stage has nothing countable.
+        """
+        running = self.running_stage
+        if running is None:
+            return ""
+        checkpoint = self.outcomes[running].checkpoint
+        if running is Stage.OCR:
+            done = int(checkpoint.get("pages_done", 0))
+            total = int(self.outcomes[Stage.ANALYSE].metrics.get("pages_needing_ocr", 0))
+            if total:
+                return "{} of {} page(s) read".format(done, total)
+            return "{} page(s) read".format(done) if done else ""
+        if running is Stage.EMBED:
+            done = int(checkpoint.get("embedded", 0))
+            return "{} passage(s) embedded".format(done) if done else ""
+        return ""
+
     def describe(self) -> str:
         """One-line human summary for logs and the UI."""
         if self.cancelled:

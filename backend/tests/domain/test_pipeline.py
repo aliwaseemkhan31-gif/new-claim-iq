@@ -436,3 +436,53 @@ def test_empty_payload_produces_a_fresh_state() -> None:
     restored = PipelineState.from_dict({})
     assert restored.next_stage() is Stage.VALIDATE
     assert restored.progress_percent == 0
+
+
+# ---------------------------------------------------------------------------
+# Progress within a stage
+#
+# Whole-stage progress does not move while a few hundred scanned pages are read,
+# which reads as a hung job. The counter the checkpoint already keeps is the
+# honest way to show movement, rather than a finer invented percentage.
+# ---------------------------------------------------------------------------
+
+
+def test_stage_detail_is_empty_when_nothing_is_running() -> None:
+    assert state().stage_detail() == ""
+
+
+def test_stage_detail_counts_ocr_pages_against_the_analysed_total() -> None:
+    pipeline = state(requires_ocr=True)
+    for stage in STAGE_ORDER:
+        if stage is Stage.OCR:
+            break
+        if not pipeline.is_required(stage):
+            pipeline.skip(stage, reason="not required")
+            continue
+        pipeline.start(stage)
+        if stage is Stage.ANALYSE:
+            pipeline.complete(stage, metrics={"pages_needing_ocr": 294})
+        else:
+            pipeline.complete(stage)
+
+    pipeline.start(Stage.OCR)
+    assert pipeline.stage_detail() == "0 of 294 page(s) read"
+
+    pipeline.checkpoint(Stage.OCR, pages_done=152, last_completed_page=152)
+    assert pipeline.stage_detail() == "152 of 294 page(s) read"
+
+
+def test_stage_detail_omits_the_total_when_the_analysis_did_not_record_one() -> None:
+    pipeline = state(requires_ocr=True)
+    for stage in STAGE_ORDER:
+        if stage is Stage.OCR:
+            break
+        if not pipeline.is_required(stage):
+            pipeline.skip(stage, reason="not required")
+            continue
+        pipeline.start(stage)
+        pipeline.complete(stage)
+
+    pipeline.start(Stage.OCR)
+    pipeline.checkpoint(Stage.OCR, pages_done=7)
+    assert pipeline.stage_detail() == "7 page(s) read"

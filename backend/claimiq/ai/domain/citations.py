@@ -213,6 +213,40 @@ def verify_quotation(quotation: str, source_text: str) -> bool:
 _REF_TOKEN_RE = re.compile(r"\b([A-Za-z]{1,3}\d{1,3})\b")
 
 
+#: The prompt's own source labelling, echoed back inside prose.
+_SCAFFOLDING_RE = re.compile(
+    r"\b(?:SOURCE\s*ID\s*:?\s*|SOURCES?\s+)(?:S\d{1,3})(?:\s*(?:,\s*)?(?:and\s+)?S\d{1,3})*\b",
+    re.IGNORECASE,
+)
+
+
+def humanise_refs(text: str) -> str:
+    """Remove the prompt's internal source labels from prose meant for a reader.
+
+    Sources are presented to the model as ``SOURCE ID: S1`` so that citations
+    can be checked against a closed set. Models sometimes carry that label into
+    the statement itself — "SOURCE ID: S1 establishes the conditions under
+    which…" — which is internal scaffolding, not something a reader can act on.
+    The citation list under each finding already names the source properly, so
+    the label is replaced with a plain reference to it.
+
+    Only the decorated forms are touched. A bare ``S1`` is left alone: it may be
+    a section, a chainage or a party's shorthand in the contract itself, and
+    rewriting it would corrupt a quotation.
+    """
+    if not text:
+        return text
+
+    def _replace(match: "re.Match[str]") -> str:
+        plural = "," in match.group(0) or " and " in match.group(0).lower()
+        return "the cited sources" if plural else "the cited source"
+
+    cleaned = _SCAFFOLDING_RE.sub(_replace, text)
+    if cleaned and cleaned[:1].islower() and text[:1].isupper():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
 def resolve_ref(raw: str, known: Container[str]) -> str | None:
     """Resolve a model-supplied reference to a known source identifier.
 

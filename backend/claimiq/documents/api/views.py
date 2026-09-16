@@ -52,11 +52,14 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
 class DocumentSerializer(serializers.ModelSerializer):
     current_version = DocumentVersionSerializer(read_only=True)
     document_type_label = serializers.SerializerMethodField()
+    # Named, not just referenced: a list across projects is unreadable when
+    # every row identifies its project by id.
+    project_name = serializers.CharField(source="project.name", read_only=True, default=None)
 
     class Meta:
         model = Document
         fields = (
-            "id", "project", "title", "document_type", "document_type_label",
+            "id", "project", "project_name", "title", "document_type", "document_type_label",
             "reference", "description", "document_date", "is_confidential",
             "current_version", "created_at", "updated_at",
         )
@@ -105,15 +108,27 @@ class ProcessingJobSerializer(serializers.ModelSerializer):
     document_title = serializers.CharField(
         source="document_version.document.title", read_only=True
     )
+    stage_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcessingJob
         fields = (
             "id", "document_id", "document_title", "kind", "status",
-            "current_stage", "progress_percent", "error_code", "error_message",
-            "started_at", "finished_at", "created_at",
+            "current_stage", "progress_percent", "stage_detail", "error_code",
+            "error_message", "started_at", "finished_at", "created_at",
         )
         read_only_fields = fields
+
+    def get_stage_detail(self, obj: ProcessingJob) -> str:
+        """How far into the running stage, in that stage's own units.
+
+        Whole-stage progress does not move during a long OCR run, which reads
+        as a stalled job on the jobs screen.
+        """
+        try:
+            return obj.load_state().stage_detail()
+        except Exception:  # noqa: BLE001 - a malformed legacy state is not a server error
+            return ""
 
 
 class DocumentViewSet(viewsets.ModelViewSet):

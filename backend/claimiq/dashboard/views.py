@@ -175,16 +175,18 @@ class DashboardView(APIView):
 
         today = timezone.localdate()
         horizon = today + timedelta(days=DEADLINE_HORIZON_DAYS)
-        candidates = (
-            Claim.objects.select_related("project")
-            .filter(
-                project_id__in=project_ids,
-                awareness_date__isnull=False,
-                human_outcome=AssessmentOutcome.NOT_ASSESSED,
-            )
-            .exclude(project__contract_edition="")
-            .order_by("awareness_date")[:MAX_DEADLINE_CLAIMS]
+        open_claims = Claim.objects.select_related("project").filter(
+            project_id__in=project_ids,
+            awareness_date__isnull=False,
+            human_outcome=AssessmentOutcome.NOT_ASSESSED,
         )
+        # Counted, not silently dropped: a claim whose project has not declared
+        # its conditions of contract has no notice periods to compute, and a
+        # bare "computed for 0 claims" would read as "nothing is due".
+        skipped_no_edition = open_claims.filter(project__contract_edition="").count()
+        candidates = open_claims.exclude(project__contract_edition="").order_by(
+            "awareness_date"
+        )[:MAX_DEADLINE_CLAIMS]
         items: list[dict[str, Any]] = []
         computed = 0
         for claim in candidates:
@@ -214,6 +216,7 @@ class DashboardView(APIView):
         items.sort(key=lambda item: item["deadline"])
         return {
             "claims_computed": computed,
+            "claims_without_edition": skipped_no_edition,
             "overdue": sum(1 for i in items if i["days_remaining"] < 0),
             "due_within_horizon": sum(1 for i in items if i["days_remaining"] >= 0),
             "horizon_days": DEADLINE_HORIZON_DAYS,

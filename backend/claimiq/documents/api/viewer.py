@@ -156,6 +156,9 @@ def processing_payload(document) -> dict[str, Any]:
         "status": job.status,
         "current_stage": job.current_stage or None,
         "progress_percent": job.progress_percent,
+        # Stage progress counts whole stages; OCR of a scanned set sits on one
+        # number for most of the run, so the stage's own counter is reported too.
+        "stage_detail": state.stage_detail(),
         "error_code": job.error_code or None,
         "error_message": job.error_message or None,
         "is_vector_searchable": _vector_searchable(state),

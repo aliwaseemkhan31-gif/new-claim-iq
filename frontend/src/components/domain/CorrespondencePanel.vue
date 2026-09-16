@@ -59,6 +59,11 @@ const claims = ref([])
 const loading = ref(true)
 const error = ref(null)
 const kindFilter = ref('')
+// On a claim, a letter is only tied to the claim once someone asserts it as a
+// Notice under a provision. Defaulting the list to the whole project is what
+// makes that assertion possible — a claim-only list would hide every letter
+// that has not been asserted yet, including one just recorded here.
+const scope = ref('project')
 
 const canManage = computed(() => auth.canInProject(props.projectId, 'correspondence.manage'))
 
@@ -68,7 +73,7 @@ async function load() {
   try {
     const data = await correspondenceApi.listCorrespondence({
       project: props.projectId,
-      claim: props.claimId || undefined,
+      claim: props.claimId && scope.value === 'claim' ? props.claimId : undefined,
       kind: kindFilter.value || undefined,
       page_size: 100,
     })
@@ -81,6 +86,22 @@ async function load() {
 }
 
 watch(kindFilter, load)
+watch(scope, load)
+watch(() => props.claimId, load)
+
+function noticesForClaim(item) {
+  if (!props.claimId) return []
+  return item.notices.filter((notice) => notice.claim === props.claimId)
+}
+
+/** Items asserted as Notices for this claim first; the rest keep server order. */
+const sortedRows = computed(() => {
+  if (!props.claimId) return rows.value
+  const tied = []
+  const rest = []
+  for (const item of rows.value) (noticesForClaim(item).length ? tied : rest).push(item)
+  return [...tied, ...rest]
+})
 
 async function loadReferenceData() {
   if (!parties.value.length) {
@@ -145,11 +166,17 @@ async function submitCreate() {
     for (const field of ['sender', 'recipient', 'sent_date', 'received_date']) {
       if (form.value[field]) payload[field] = form.value[field]
     }
-    await correspondenceApi.createCorrespondence(payload)
+    const created = await correspondenceApi.createCorrespondence(payload)
     ui.notifySuccess('Correspondence recorded')
     createOpen.value = false
     await load()
     emit('changed')
+    // Recorded from a claim: carry straight on to the question that decides
+    // whether it counts — under which provision, and for which claim.
+    if (props.claimId && created?.id) {
+      await openNotice(created)
+      noticeForm.value.clause_number = payload.clause_references[0] || ''
+    }
   } catch (err) {
     fieldErrors.value = err?.fieldErrors ?? {}
     if (!Object.keys(fieldErrors.value).length) ui.notifyError(err, 'Could not record it')
@@ -219,6 +246,15 @@ onMounted(load)
 <template>
   <div class="stack gap-4">
     <div class="toolbar between">
+      <select
+        v-if="claimId"
+        v-model="scope"
+        class="field-input correspondence__filter"
+        aria-label="Scope"
+      >
+        <option value="project">All correspondence on this project</option>
+        <option value="claim">Only Notices for this claim</option>
+      </select>
       <select v-model="kindFilter" class="field-input correspondence__filter" aria-label="Kind">
         <option value="">All correspondence</option>
         <option v-for="[value, label] in KINDS" :key="value" :value="value">{{ label }}</option>
@@ -264,7 +300,7 @@ onMounted(load)
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in rows" :key="item.id">
+            <tr v-for="item in sortedRows" :key="item.id">
               <td>
                 <p class="correspondence__subject">{{ item.subject }}</p>
                 <p v-if="item.reference" class="text-xs text-mono text-muted">{{ item.reference }}</p>
@@ -284,6 +320,13 @@ onMounted(load)
                       :label="'Clause ' + notice.clause_number"
                       size="sm"
                     />
+                    <span class="text-xs text-muted">
+                      <template v-if="claimId && notice.claim === claimId">this claim</template>
+                      <template v-else-if="notice.claim">
+                        {{ notice.claim_reference || notice.claim_title }}
+                      </template>
+                      <template v-else>no claim</template>
+                    </span>
                     <AppButton
                       v-if="canManage"
                       size="sm"

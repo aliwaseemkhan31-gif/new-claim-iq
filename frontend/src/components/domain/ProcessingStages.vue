@@ -91,7 +91,8 @@ const stages = computed(() =>
         <div class="row gap-2">
           <StatusBadge :status="processing.processing_status" />
           <span v-if="job && job.status !== 'completed'" class="text-xs text-muted">
-            {{ job.progress_percent }}%
+            {{ job.progress_percent }}%<template v-if="job.stage_detail">
+              — {{ job.stage_detail }}</template>
           </span>
           <span v-if="processing.extraction_method && processing.extraction_method !== 'none'" class="text-xs text-muted">
             {{ processing.extraction_method }} extraction

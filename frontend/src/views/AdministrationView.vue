@@ -348,7 +348,11 @@ onMounted(load)
                   {{ job.project || (job.is_reference_document ? 'Knowledge base' : EM_DASH) }}
                 </td>
                 <td><StatusBadge :status="job.status" size="sm" /></td>
-                <td class="text-xs">{{ job.current_stage || EM_DASH }}</td>
+                <td class="text-xs">
+                  {{ job.current_stage || EM_DASH }}
+                  <!-- Whole-stage progress does not move during a long OCR run. -->
+                  <span v-if="job.stage_detail" class="text-muted">— {{ job.stage_detail }}</span>
+                </td>
                 <td class="cell-numeric">{{ job.progress_percent }}%</td>
                 <td>{{ formatDateTime(job.created_at) }}</td>
               </tr>

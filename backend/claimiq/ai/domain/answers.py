@@ -28,7 +28,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from claimiq.ai.domain.citations import Citation, EpistemicStatus, Finding
+from claimiq.ai.domain.citations import (
+    Citation,
+    EpistemicStatus,
+    Finding,
+    humanise_refs,
+)
 from claimiq.core.domain.errors import StructuredOutputError
 
 
@@ -259,7 +264,9 @@ def parse_answer(raw: str | Mapping[str, Any]) -> StructuredAnswer:
             )
         findings.append(
             Finding(
-                statement=statement.strip(),
+                # The prompt's own source labels are internal scaffolding, and
+                # a reader cannot act on "SOURCE ID: S1 establishes...".
+                statement=humanise_refs(statement.strip()),
                 status=_parse_status(entry.get("status")),
                 citations=tuple(
                     _parse_citation(c, i) for i, c in enumerate(raw_citations)

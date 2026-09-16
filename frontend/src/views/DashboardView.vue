@@ -44,6 +44,21 @@ const tiles = computed(() => {
 })
 
 const deadlines = computed(() => data.value?.notices?.items ?? [])
+
+/** Why the list is empty, which is not the same as "nothing is due". */
+const deadlineBasis = computed(() => {
+  const notices = data.value?.notices ?? {}
+  const computedCount = notices.claims_computed ?? 0
+  const skipped = notices.claims_without_edition ?? 0
+  const parts = [`Computed for ${computedCount} claim(s) with a recorded awareness date.`]
+  if (skipped) {
+    parts.push(
+      `${skipped} open claim(s) were not computed because their project has not declared ` +
+        'which conditions of contract govern it.',
+    )
+  }
+  return parts.join(' ')
+})
 const activity = computed(() => data.value?.recent_activity ?? [])
 const knowledge = computed(() => data.value?.knowledge ?? null)
 
@@ -154,7 +169,7 @@ onMounted(load)
             compact
             icon="pi pi-calendar"
             title="No deadlines within 30 days"
-            :description="'Computed for ' + (data.notices.claims_computed ?? 0) + ' claim(s) with a recorded awareness date.'"
+            :description="deadlineBasis"
           />
           <ul v-else class="dashboard__list">
             <li v-for="item in deadlines" :key="item.claim_id + item.clause_number" class="dashboard__row">

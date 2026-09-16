@@ -60,12 +60,16 @@ class ClaimIssueSerializer(serializers.ModelSerializer):
 
 
 class EvidenceSerializer(serializers.ModelSerializer):
+    claim_reference = serializers.CharField(source="claim.reference", read_only=True, default=None)
+    claim_title = serializers.CharField(source="claim.title", read_only=True, default=None)
+    document_title = serializers.CharField(source="document.title", read_only=True, default=None)
+
     class Meta:
         model = Evidence
         fields = (
-            "id", "claim", "issue", "title", "description", "document",
-            "page_number", "excerpt", "relevance", "weight",
-            "is_ai_suggested", "reviewed_at",
+            "id", "claim", "claim_reference", "claim_title", "issue", "title",
+            "description", "document", "document_title", "page_number", "excerpt",
+            "relevance", "weight", "is_ai_suggested", "reviewed_at",
         )
         read_only_fields = ("id", "is_ai_suggested", "reviewed_at")
 
@@ -74,11 +78,15 @@ class ClaimSerializer(serializers.ModelSerializer):
     issues = ClaimIssueSerializer(many=True, read_only=True)
     evidence_count = serializers.IntegerField(read_only=True, default=0)
     has_awareness_date = serializers.BooleanField(read_only=True)
+    project_name = serializers.CharField(source="project.name", read_only=True)
+    claimant_name = serializers.CharField(source="claimant.name", read_only=True, default=None)
+    respondent_name = serializers.CharField(source="respondent.name", read_only=True, default=None)
 
     class Meta:
         model = Claim
         fields = (
-            "id", "project", "reference", "title", "description",
+            "id", "project", "project_name", "reference", "title", "description",
+            "claimant_name", "respondent_name",
             "claim_type", "status", "claimant", "respondent",
             "event_date", "awareness_date", "notice_date", "submission_date",
             "determination_date", "amount_claimed", "amount_assessed",

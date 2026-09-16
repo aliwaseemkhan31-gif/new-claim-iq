@@ -147,6 +147,22 @@ async function setRelevance(item, relevance) {
   }
 }
 
+/**
+ * Which issue the evidence goes to, editable after the fact.
+ *
+ * This is what ties evidence to a required element, so getting it wrong at
+ * creation would otherwise mean deleting the record and filing it again.
+ */
+async function setIssue(item, issue) {
+  try {
+    const updated = await claimsApi.updateEvidence(item.id, { issue: issue || null })
+    Object.assign(item, updated)
+    emit('changed')
+  } catch (err) {
+    ui.notifyError(err, 'Could not change what the evidence shows')
+  }
+}
+
 async function remove(item) {
   try {
     await claimsApi.deleteEvidence(item.id)
@@ -201,6 +217,7 @@ onMounted(load)
               <th scope="col">Evidence</th>
               <th v-if="showClaim" scope="col">Claim</th>
               <th scope="col">Source</th>
+              <th v-if="issues.length" scope="col">What it shows</th>
               <th scope="col">Assessment</th>
               <th scope="col">Reviewed</th>
               <th v-if="canManage" scope="col"><span class="sr-only">Actions</span></th>
@@ -212,7 +229,9 @@ onMounted(load)
                 <p class="evidence__title">{{ item.title }}</p>
                 <p v-if="item.excerpt" class="evidence__excerpt">{{ item.excerpt }}</p>
               </td>
-              <td v-if="showClaim" class="text-xs">{{ item.claim || EM_DASH }}</td>
+              <td v-if="showClaim" class="text-xs">
+                {{ item.claim_reference || item.claim_title || EM_DASH }}
+              </td>
               <td>
                 <RouterLink
                   v-if="item.document"
@@ -226,6 +245,23 @@ onMounted(load)
                   Open document<template v-if="item.page_number">, p.{{ item.page_number }}</template>
                 </RouterLink>
                 <span v-else class="text-xs text-muted">No document linked</span>
+              </td>
+              <td v-if="issues.length">
+                <select
+                  v-if="canManage"
+                  class="field-input evidence__relevance"
+                  :value="item.issue || ''"
+                  aria-label="What it shows"
+                  @change="setIssue(item, $event.target.value)"
+                >
+                  <option value="">Not tied to an issue</option>
+                  <option v-for="issue in issues" :key="issue.id" :value="issue.id">
+                    {{ issue.title }}
+                  </option>
+                </select>
+                <span v-else class="text-xs text-muted">
+                  {{ issues.find((issue) => issue.id === item.issue)?.title || 'Not tied to an issue' }}
+                </span>
               </td>
               <td>
                 <select

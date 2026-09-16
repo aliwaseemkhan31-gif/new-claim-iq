@@ -255,3 +255,60 @@ def test_undeclared_placeholder_is_caught_by_validation() -> None:
 
     placeholders = set(re.findall(r"\{(\w+)\}", broken.template))
     assert placeholders - broken.required_variables == {"name"}
+
+
+# ---------------------------------------------------------------------------
+# Source labels in prose
+#
+# Sources reach the model as "SOURCE ID: S1" so citations can be checked
+# against a closed set. Observed from qwen2.5:3b-instruct on a real claim:
+# "SOURCE ID: S1 establishes the conditions under which the Engineer may
+# determine an extension of time" — internal scaffolding presented to a reader.
+# ---------------------------------------------------------------------------
+
+
+def test_humanise_refs_replaces_a_decorated_label_in_prose() -> None:
+    from claimiq.ai.domain.citations import humanise_refs
+
+    assert humanise_refs("SOURCE ID: S1 establishes the period.") == (
+        "The cited source establishes the period."
+    )
+    assert humanise_refs("Source S2 outlines the requirement.") == (
+        "The cited source outlines the requirement."
+    )
+
+
+def test_humanise_refs_reads_a_list_of_sources_as_plural() -> None:
+    from claimiq.ai.domain.citations import humanise_refs
+
+    assert humanise_refs("SOURCE ID: S1, S2 and S3 together set the period.") == (
+        "The cited sources together set the period."
+    )
+
+
+def test_humanise_refs_leaves_a_bare_token_alone() -> None:
+    """It may be a section, a chainage or a party's shorthand in the contract."""
+    from claimiq.ai.domain.citations import humanise_refs
+
+    text = "Chainage S1 was handed over on 10 August."
+    assert humanise_refs(text) == text
+    assert humanise_refs("") == ""
+
+
+def test_parsed_findings_carry_no_source_scaffolding() -> None:
+    from claimiq.ai.domain.answers import parse_answer
+
+    answer = parse_answer(
+        {
+            "summary": "The notice period is 28 days.",
+            "confidence": "low",
+            "findings": [
+                {
+                    "statement": "SOURCE ID: S1 establishes the notice period.",
+                    "status": "fact",
+                    "citations": [{"ref": "S1"}],
+                }
+            ],
+        }
+    )
+    assert answer.findings[0].statement == "The cited source establishes the notice period."

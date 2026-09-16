@@ -292,11 +292,24 @@ class ClaimIssue(BaseModel):
     """
 
     class Category(models.TextChoices):
+        """Strands of a claim.
+
+        Every category an issue can take must reach an element the evidence-gap
+        engine looks for, directly or through ``ISSUE_CATEGORY_TO_ELEMENT``.
+        Evidence is tagged by the issue it is attached to, so a category with no
+        element leaves that element permanently unestablished — which is how
+        "The triggering event" stayed a gap on every claim regardless of the
+        site records on file.
+        """
+
         ENTITLEMENT = "entitlement", "Contractual entitlement"
+        EVENT = "event", "The triggering event"
         NOTICE_COMPLIANCE = "notice_compliance", "Notice compliance"
         CAUSATION = "causation", "Causation"
         RESPONSIBILITY = "responsibility", "Responsibility"
+        INSTRUCTION = "instruction", "The instruction"
         TIME_IMPACT = "time_impact", "Time impact"
+        COST_IMPACT = "cost_impact", "Cost incurred"
         QUANTUM = "quantum", "Quantum"
         MITIGATION = "mitigation", "Mitigation"
         OTHER = "other", "Other"

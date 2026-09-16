@@ -94,6 +94,14 @@ def _validated_password(password: str, user: User | None = None) -> str:
     return password
 
 
+def _stage_detail(job) -> str:
+    """Progress within a job's running stage, in that stage's own units."""
+    try:
+        return job.load_state().stage_detail()
+    except Exception:  # noqa: BLE001 - a malformed legacy state is not a server error
+        return ""
+
+
 class RolesView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -379,6 +387,9 @@ class JobsView(APIView):
                         "status": job.status,
                         "current_stage": job.current_stage or None,
                         "progress_percent": job.progress_percent,
+                        # Whole-stage progress does not move during a long OCR
+                        # run, which reads as a stalled job.
+                        "stage_detail": _stage_detail(job),
                         "error_message": job.error_message or None,
                         "created_at": job.created_at.isoformat(),
                         "finished_at": job.finished_at.isoformat() if job.finished_at else None,

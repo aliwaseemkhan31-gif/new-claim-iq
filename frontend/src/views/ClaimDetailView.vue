@@ -52,12 +52,18 @@ const OUTCOMES = [
   ['not_assessed', 'Not assessed'],
 ]
 
+// Mirrors ClaimIssue.Category. Each one addresses an element the evidence-gap
+// engine looks for; evidence is tied to an element by the issue it is attached
+// to, so a category missing here makes that element unprovable in the UI.
 const ISSUE_CATEGORIES = [
   ['entitlement', 'Contractual entitlement'],
+  ['event', 'The triggering event'],
   ['notice_compliance', 'Notice compliance'],
   ['causation', 'Causation'],
   ['responsibility', 'Responsibility'],
+  ['instruction', 'The instruction'],
   ['time_impact', 'Time impact'],
+  ['cost_impact', 'Cost incurred'],
   ['quantum', 'Quantum'],
   ['mitigation', 'Mitigation'],
   ['other', 'Other'],
@@ -299,6 +305,7 @@ onMounted(load)
                   <th scope="col">Element</th>
                   <th scope="col">Status</th>
                   <th scope="col">Essential</th>
+                  <th scope="col">On record</th>
                   <th scope="col">What would establish it</th>
                 </tr>
               </thead>
@@ -307,6 +314,20 @@ onMounted(load)
                   <td>{{ element.label }}</td>
                   <td><StatusBadge :status="element.status" size="sm" /></td>
                   <td>{{ element.is_essential ? 'Yes' : 'No' }}</td>
+                  <td class="text-xs">
+                    <!-- An element with only contradicting evidence is not
+                         established, but it is not untouched either; showing
+                         the counts keeps "missing" from reading as "nobody
+                         has looked". -->
+                    <span v-if="element.supporting">{{ element.supporting }} supporting</span>
+                    <span v-if="element.contradicting" class="text-warning">
+                      <template v-if="element.supporting">, </template>
+                      {{ element.contradicting }} contradicting
+                    </span>
+                    <span v-if="!element.supporting && !element.contradicting" class="text-muted">
+                      Nothing linked
+                    </span>
+                  </td>
                   <td class="text-xs text-muted">{{ element.suggestion }}</td>
                 </tr>
               </tbody>
