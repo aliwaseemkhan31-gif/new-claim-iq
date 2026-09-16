@@ -857,6 +857,10 @@ def run_analysis(analysis_id, *, answering_service=None) -> ClaimAnalysis:
         ]
     )
     logger.info("analysis.finished", extra={"status": analysis.status})
+
+    from claimiq.analysis.signals import analysis_finished
+
+    analysis_finished.send(sender=ClaimAnalysis, analysis=analysis)
     return analysis
 
 

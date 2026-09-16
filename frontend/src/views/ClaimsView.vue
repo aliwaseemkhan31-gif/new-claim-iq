@@ -1,5 +1,5 @@
 <script setup>
-import FeaturePending from '@/components/common/FeaturePending.vue'
+import ClaimsPanel from '@/components/domain/ClaimsPanel.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 </script>
 
@@ -7,16 +7,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
   <div class="page">
     <PageHeader
       title="Claims"
-      description="Claims across every project you can access."
+      description="Every claim on the projects you can see. Open one to check notice, evidence, analysis and the determination."
     />
-
-    <div class="surface">
-      <FeaturePending
-        icon="pi pi-briefcase"
-        title="Claims register not available yet"
-        description="The cross-project claims register shows each claim with its contractual basis, quantum, status and assessment. Requires the claims API."
-        endpoint="/api/v1/claims/"
-      />
-    </div>
+    <ClaimsPanel show-project />
   </div>
 </template>

@@ -115,6 +115,153 @@ class PdfPlumberExtractor:
             ) from exc
         return pages
 
+    def extract_tables(
+        self, file_path: str, *, page_numbers: Sequence[int]
+    ) -> list[tuple[int, list[list[str | None]]]]:
+        """Extract table cell grids from the requested digital pages.
+
+        Returns ``(page_number, rows)`` per table, in page order. Only pages
+        with a text layer are meaningful here: pdfplumber reads ruling lines
+        and character positions, neither of which a scanned page has.
+        """
+        import pdfplumber
+
+        wanted = set(page_numbers)
+        tables: list[tuple[int, list[list[str | None]]]] = []
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for index, page in enumerate(pdf.pages, start=1):
+                    if index not in wanted:
+                        continue
+                    for rows in page.extract_tables() or []:
+                        if rows and any(any(cell for cell in row) for row in rows):
+                            tables.append((index, rows))
+        except Exception as exc:
+            raise ExtractionError(
+                "Table extraction failed.", details={"reason": type(exc).__name__}
+            ) from exc
+        return tables
+
+
+def image_page_analyses(file_path: str) -> list[PageAnalysis]:
+    """Page analysis for an image file: every frame is a scanned page."""
+    from PIL import Image
+
+    analyses: list[PageAnalysis] = []
+    try:
+        with Image.open(file_path) as image:
+            frames = int(getattr(image, "n_frames", 1) or 1)
+            for index in range(frames):
+                image.seek(index)
+                analyses.append(
+                    PageAnalysis(
+                        page_number=index + 1,
+                        digital_character_count=0,
+                        needs_ocr=True,
+                        has_tables=False,
+                        width=float(image.width),
+                        height=float(image.height),
+                    )
+                )
+    except Exception as exc:
+        raise ExtractionError(
+            "The image could not be opened. It may be corrupt.",
+            details={"reason": type(exc).__name__},
+        ) from exc
+    return analyses
+
+
+class OfficeExtractor:
+    """Text from DOCX, XLSX and plain-text files, split into pseudo-pages.
+
+    These formats have no pages. Text is paginated on paragraph boundaries
+    (see :func:`claimiq.ingestion.domain.layout.paginate_text`) so citations
+    and the viewer work the same way they do for PDFs.
+    """
+
+    name = "office"
+
+    def extract(self, file_path: str, kind) -> list[ExtractedPage]:
+        from claimiq.ingestion.domain.layout import FileKind, paginate_text
+
+        try:
+            if kind is FileKind.DOCX:
+                text = self._docx_text(file_path)
+            elif kind is FileKind.XLSX:
+                text = self._xlsx_text(file_path)
+            elif kind is FileKind.TEXT:
+                text = self._plain_text(file_path)
+            else:
+                raise ExtractionError(
+                    "This file is not an office or text document.",
+                    details={"file_kind": getattr(kind, "value", str(kind))},
+                )
+        except ExtractionError:
+            raise
+        except Exception as exc:
+            raise ExtractionError(
+                "The document could not be read. It may be corrupt or password-protected.",
+                details={"reason": type(exc).__name__},
+            ) from exc
+
+        return [
+            ExtractedPage(page_number=index, text=page)
+            for index, page in enumerate(paginate_text(text), start=1)
+        ]
+
+    @staticmethod
+    def _docx_text(file_path: str) -> str:
+        """Paragraphs and tables in body order."""
+        from docx import Document as DocxDocument
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+
+        from claimiq.ingestion.domain.layout import render_table_text
+
+        document = DocxDocument(file_path)
+        blocks: list[str] = []
+        for child in document.element.body.iterchildren():
+            tag = child.tag.rsplit("}", 1)[-1]
+            if tag == "p":
+                text = Paragraph(child, document).text.strip()
+                if text:
+                    blocks.append(text)
+            elif tag == "tbl":
+                table = Table(child, document)
+                rendered = render_table_text([cell.text for cell in row.cells] for row in table.rows)
+                if rendered:
+                    blocks.append(rendered)
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _xlsx_text(file_path: str) -> str:
+        """Each sheet as a titled table. Formulas read as their cached values."""
+        from openpyxl import load_workbook
+
+        from claimiq.ingestion.domain.layout import render_table_text
+
+        workbook = load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            blocks: list[str] = []
+            for sheet in workbook.worksheets:
+                rendered = render_table_text(sheet.iter_rows(values_only=True))
+                if rendered:
+                    blocks.append(f"Sheet: {sheet.title}\n\n{rendered}")
+            return "\n\n".join(blocks)
+        finally:
+            workbook.close()
+
+    @staticmethod
+    def _plain_text(file_path: str) -> str:
+        with open(file_path, "rb") as handle:
+            raw = handle.read()
+        for encoding in ("utf-8-sig", "cp1252"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
+
 
 class DocTROCRProvider(OCRProvider):
     """OCR via docTR.
@@ -248,3 +395,127 @@ class DocTROCRProvider(OCRProvider):
             },
         )
         return results
+
+
+class RapidOCRProvider(OCRProvider):
+    """OCR via RapidOCR: PP-OCRv4 detection and recognition on ONNX Runtime.
+
+    The default offline engine. Its models ship inside the Python wheel, it
+    runs on CPU, and it needs no system binary and no download at runtime —
+    the properties an air-gapped installation needs. docTR is preferred when
+    installed (see :func:`build_ocr_provider`).
+
+    Known limitation, surfaced rather than hidden: recognition occasionally
+    drops the space between words ("theContractor"). Lexical search recall on
+    OCR'd pages is reduced accordingly; the extraction quality score reflects
+    OCR provenance.
+    """
+
+    provider_key = "rapidocr"
+
+    #: Render scale for OCR. Measured on the scanned N-55 contract: at 2.0
+    #: (144 dpi) recognition dropped inter-word spaces on 5 of ~313 words of a
+    #: page; at 3.0 (216 dpi) none, for ~7% more time.
+    DEFAULT_RENDER_SCALE = 3.0
+
+    def __init__(self, *, render_scale: float = DEFAULT_RENDER_SCALE) -> None:
+        self._engine = None
+        self._render_scale = render_scale
+
+    def is_available(self) -> bool:
+        try:
+            import rapidocr_onnxruntime  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
+    def list_models(self) -> Sequence[ModelSpec]:
+        if not self.is_available():
+            return ()
+        return (
+            ModelSpec(
+                name="ppocr-v4-onnx",
+                provider=self.provider_key,
+                display_name="RapidOCR (PP-OCRv4, ONNX Runtime)",
+            ),
+        )
+
+    def _load(self):
+        if self._engine is not None:
+            return self._engine
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError as exc:
+            raise ProviderUnavailableError(
+                "OCR was requested but RapidOCR is not installed in this deployment.",
+                details={"remedy": "Install rapidocr_onnxruntime in the backend environment."},
+            ) from exc
+        logger.info("ocr.model_loading", extra={"provider": self.provider_key})
+        self._engine = RapidOCR()
+        return self._engine
+
+    def extract(
+        self, file_path: str, *, page_numbers: Sequence[int] | None = None
+    ) -> list[ExtractedPage]:
+        import numpy as np
+
+        from claimiq.ingestion.domain.layout import assemble_ocr_lines
+        from claimiq.ingestion.providers.pages import iter_page_images, sniff_file_kind
+
+        engine = self._load()
+        kind = sniff_file_kind(file_path)
+        started = time.perf_counter()
+        results: list[ExtractedPage] = []
+
+        for page_number, image in iter_page_images(
+            file_path, kind, page_numbers, scale=self._render_scale
+        ):
+            try:
+                detections, _elapsed = engine(np.asarray(image))
+            except Exception as exc:
+                raise OCRError(
+                    "OCR failed on a page.",
+                    details={"reason": type(exc).__name__, "failed_from_page": page_number},
+                ) from exc
+            text, confidence = assemble_ocr_lines(
+                [(d[0], d[1], d[2]) for d in (detections or [])]
+            )
+            results.append(
+                ExtractedPage(
+                    page_number=page_number,
+                    text=text,
+                    confidence=confidence,
+                    width=float(image.width),
+                    height=float(image.height),
+                )
+            )
+
+        logger.info(
+            "ocr.completed",
+            extra={
+                "provider": self.provider_key,
+                "pages": len(results),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+            },
+        )
+        return results
+
+
+def build_ocr_provider() -> OCRProvider:
+    """The OCR engine for this deployment: docTR if installed, else RapidOCR.
+
+    Raises:
+        ProviderUnavailableError: neither engine is installed. Scanned pages
+            then fail their OCR stage with this message, rather than being
+            reported as processed with no text.
+    """
+    doctr = DocTROCRProvider()
+    if doctr.is_available():
+        return doctr
+    rapid = RapidOCRProvider()
+    if rapid.is_available():
+        return rapid
+    raise ProviderUnavailableError(
+        "Scanned pages need OCR, and no OCR engine is installed in this deployment.",
+        details={"remedy": "Install rapidocr_onnxruntime (CPU, offline) or python-doctr with torch."},
+    )

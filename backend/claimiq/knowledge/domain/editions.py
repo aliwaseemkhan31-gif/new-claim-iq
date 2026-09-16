@@ -324,7 +324,83 @@ class EditionRegistry:
         return code in self._editions
 
 
+EDITION_YELLOW_BOOK_2017 = ContractEdition(
+    code="yellow-book-2017",
+    form_code=FORM_FIDIC_YELLOW_BOOK.code,
+    year=2017,
+    label="FIDIC Yellow Book 2017 (2nd Edition)",
+    topic_map=_topics(
+        TopicMapping(TOPIC_EMPLOYER_OBLIGATIONS, "2", "The Employer"),
+        TopicMapping(TOPIC_ENGINEER, "3", "The Engineer"),
+        TopicMapping(TOPIC_CONTRACTOR_OBLIGATIONS, "4", "The Contractor"),
+        TopicMapping(TOPIC_PHYSICAL_CONDITIONS, "4.12", "Unforeseeable Physical Conditions"),
+        TopicMapping(TOPIC_EXTENSION_OF_TIME, "8.5", "Extension of Time for Completion"),
+        TopicMapping(TOPIC_SUSPENSION, "8.9", "Employer's Suspension"),
+        TopicMapping(TOPIC_VARIATIONS, "13", "Variations and Adjustments"),
+        TopicMapping(TOPIC_PAYMENT, "14", "Contract Price and Payment"),
+        TopicMapping(TOPIC_TERMINATION, "15", "Termination by Employer"),
+        TopicMapping(TOPIC_FORCE_MAJEURE, "18", "Exceptional Events"),
+        TopicMapping(TOPIC_CLAIMS_PROCEDURE, "20", "Employer's and Contractor's Claims"),
+        TopicMapping(TOPIC_DISPUTES, "21", "Disputes and Arbitration"),
+    ),
+    notes=(
+        "Plant and Design-Build, 2nd Edition 2017. Topic map verified against "
+        "the clause headings of the source PDF. Shares the 2017 claims regime "
+        "(Clause 20) with the Red Book 2017, but the Contractor designs, so "
+        "design-responsibility provisions differ materially."
+    ),
+)
+
+EDITION_SILVER_BOOK_1999 = ContractEdition(
+    code="silver-book-1999",
+    form_code=FORM_FIDIC_SILVER_BOOK.code,
+    year=1999,
+    label="FIDIC Silver Book 1999 (1st Edition)",
+    topic_map=_topics(
+        TopicMapping(TOPIC_EMPLOYER_OBLIGATIONS, "2", "The Employer"),
+        # No Engineer: the Employer administers the contract directly.
+        TopicMapping(TOPIC_ENGINEER, "3", "The Employer's Administration"),
+        TopicMapping(TOPIC_CONTRACTOR_OBLIGATIONS, "4", "The Contractor"),
+        TopicMapping(TOPIC_PHYSICAL_CONDITIONS, "4.12", "Unforeseeable Difficulties"),
+        TopicMapping(TOPIC_EXTENSION_OF_TIME, "8.4", "Extension of Time for Completion"),
+        TopicMapping(TOPIC_SUSPENSION, "8.8", "Suspension of Work"),
+        TopicMapping(TOPIC_VARIATIONS, "13", "Variations and Adjustments"),
+        TopicMapping(TOPIC_PAYMENT, "14", "Contract Price and Payment"),
+        TopicMapping(TOPIC_TERMINATION, "15", "Termination by Employer"),
+        TopicMapping(TOPIC_FORCE_MAJEURE, "19", "Force Majeure"),
+        TopicMapping(TOPIC_CLAIMS_PROCEDURE, "20.1", "Contractor's Claims"),
+        TopicMapping(TOPIC_DISPUTES, "20.4", "Obtaining Dispute Adjudication Board's Decision"),
+    ),
+    notes=(
+        "EPC/Turnkey Projects, 1st Edition 1999. Topic map verified against the "
+        "contents pages of the source PDF. Sub-Clause 4.12 allocates "
+        "unforeseeable difficulties to the Contractor — the opposite of the "
+        "Red and Yellow Books — so a physical-conditions question answered "
+        "from the wrong book reverses the risk allocation."
+    ),
+)
+
+EDITION_SILVER_BOOK_2017 = ContractEdition(
+    code="silver-book-2017",
+    form_code=FORM_FIDIC_SILVER_BOOK.code,
+    year=2017,
+    label="FIDIC Silver Book 2017 (2nd Edition)",
+    notes=(
+        "EPC/Turnkey Projects, 2nd Edition 2017. Registered so projects on this "
+        "form are representable. No topic map: the available source PDF is a "
+        "scan with no text layer, and clause locations are not transcribed "
+        "until it has been OCR'd and checked."
+    ),
+)
+
 DEFAULT_REGISTRY = EditionRegistry(
     forms=[FORM_FIDIC_RED_BOOK, FORM_FIDIC_YELLOW_BOOK, FORM_FIDIC_SILVER_BOOK],
-    editions=[EDITION_RED_BOOK_1987, EDITION_RED_BOOK_1999, EDITION_RED_BOOK_2017],
+    editions=[
+        EDITION_RED_BOOK_1987,
+        EDITION_RED_BOOK_1999,
+        EDITION_RED_BOOK_2017,
+        EDITION_YELLOW_BOOK_2017,
+        EDITION_SILVER_BOOK_1999,
+        EDITION_SILVER_BOOK_2017,
+    ],
 )

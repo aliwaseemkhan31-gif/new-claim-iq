@@ -322,3 +322,66 @@ def test_full_detection_separates_headings_from_citations() -> None:
     assert set(result.clause_numbers()) == {"20", "20.2.1"}
     assert all(h.page_number != 16 for h in result.headings)
     assert any(c.number == "20.2.1" and c.is_explicit for c in result.citations)
+
+
+# ---------------------------------------------------------------------------
+# Printings that number clauses in the margin (FIDIC 1987)
+# ---------------------------------------------------------------------------
+
+
+MARGIN_PAGE = """any further contemporary records as are reasonable and may be material to the
+claim of which notice has been given. The Contractor shall permit the Engineer to
+inspect all records kept pursuant to this Sub-Clause.
+Substantiation 53.3 Within 28 days, or such other reasonable time as may be agreed by the Engineer,
+of Claims of giving notice under Sub-Clause 53.1, the Contractor shall send an account."""
+
+CONTENTS_PAGE = """CONTENTS
+16.1 Contractor's Employees 8
+16.2 Engineer at Liberty to Object 8
+17.1 Setting-out 9
+18.1 Boreholes and Exploratory Excavation 9
+19.1 Safety, Security and Protection of the Environment 9"""
+
+
+def test_contents_entry_with_a_single_space_before_the_page_number() -> None:
+    """Regression: the 1987 printing sets contents without dot leaders, so
+    every entry was read as a clause heading and contaminated the structure."""
+    assert is_contents_line("16.1 Contractor's Employees 8")
+    assert is_contents_line("44.2 Engineer's Determination of Extension 21")
+
+
+def test_a_provision_line_is_not_a_contents_entry() -> None:
+    assert not is_contents_line(
+        "53.3 Within 28 days, or such other reasonable time as may be agreed by the Engineer,"
+    )
+    assert not is_contents_line("The amount certified was 1 250")
+
+
+def test_a_contents_page_is_excluded_from_body_content() -> None:
+    assert classify_page(PageText(page_number=4, text=CONTENTS_PAGE)) is False
+
+
+def test_clause_number_after_a_marginal_note_is_detected() -> None:
+    """Regression: with the number inline after the marginal note, no heading
+    was found and passages inherited the previous clause's number — so a
+    citation named the wrong provision."""
+    headings, _skipped = detect_headings([PageText(page_number=32, text=MARGIN_PAGE)])
+    assert [h.number for h in headings] == ["53.3"]
+    heading = headings[0]
+    assert heading.title == "Substantiation"
+    # The provision starts at its number, not at the marginal note.
+    assert MARGIN_PAGE[heading.char_offset :].startswith("53.3 Within 28 days")
+
+
+def test_prose_beginning_with_a_clause_reference_is_not_a_marginal_heading() -> None:
+    page = PageText(
+        page_number=9,
+        text="Sub-Clause 20.2 The Contractor shall be responsible for the care of the Works.",
+    )
+    assert detect_headings([page])[0] == []
+
+
+def test_line_leading_headings_are_unaffected() -> None:
+    page = PageText(page_number=1, text="20.2.1 Notice of Claim\nThe Contractor shall give a Notice.")
+    headings, _skipped = detect_headings([page])
+    assert [(h.number, h.title) for h in headings] == [("20.2.1", "Notice of Claim")]

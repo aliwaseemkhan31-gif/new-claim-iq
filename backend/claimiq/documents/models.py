@@ -64,7 +64,26 @@ class Document(BaseSoftDeleteModel):
     and citations into a historical revision, both depend on that.
     """
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="documents")
+    project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="documents",
+        help_text=(
+            "Owning project. Null only for organization-level reference "
+            "documents — the sources of knowledge bases — which never enter "
+            "project retrieval or project document lists."
+        ),
+    )
+    organization = models.ForeignKey(
+        "accounts.Organization",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="reference_documents",
+        help_text="Set for reference documents, which have no project.",
+    )
     collection = models.ForeignKey(
         DocumentCollection,
         null=True,
@@ -103,6 +122,17 @@ class Document(BaseSoftDeleteModel):
     class Meta:
         db_table = "documents_document"
         ordering = ["-created_at"]
+        constraints = [
+            # Exactly one owner: a project document or an organization
+            # reference document, never both and never neither.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(project__isnull=False, organization__isnull=True)
+                    | models.Q(project__isnull=True, organization__isnull=False)
+                ),
+                name="document_has_exactly_one_owner",
+            )
+        ]
         indexes = [
             models.Index(fields=["project", "document_type"]),
             models.Index(fields=["project", "-document_date"]),

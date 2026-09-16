@@ -19,6 +19,13 @@ from claimiq.accounts.domain.permissions import (
 from claimiq.core.api.pagination import LargePagination
 from claimiq.core.api.permissions import access_for
 from claimiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
+from claimiq.documents.api.viewer import (
+    original_file_response,
+    page_image_response,
+    page_payload,
+    processing_payload,
+    sections_payload,
+)
 from claimiq.documents.domain.taxonomy import ALL_CATEGORIES, DEFAULT_TAXONOMY
 from claimiq.documents.models import (
     Document,
@@ -243,8 +250,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
             raise ValidationError("This document has no version to reprocess.")
 
         from claimiq.ingestion.domain.pipeline import Stage
+        from claimiq.ingestion.services.dispatch import dispatch_job
         from claimiq.ingestion.services.runner import reprocess_from
-        from claimiq.ingestion.tasks import process_document
 
         stage_value = request.data.get("from_stage") or Stage.VALIDATE.value
         try:
@@ -256,8 +263,43 @@ class DocumentViewSet(viewsets.ModelViewSet):
             ) from None
 
         job = reprocess_from(document.current_version, stage)
-        process_document.apply_async(args=[str(job.id)], queue="ingestion")
+        dispatch_job(str(job.id))
         return Response({"job_id": str(job.id), "from_stage": stage.value})
+
+    @action(detail=True, methods=["get"], url_path=r"pages/(?P<page_number>\d+)")
+    def page(self, request: Request, pk: str | None = None, page_number: str = "1") -> Response:
+        """One page's text and what the viewer can show for it."""
+        document = self.get_object()
+        self._require(DOCUMENT_VIEW.code, str(document.project_id))
+        return Response(page_payload(document, int(page_number)))
+
+    @action(detail=True, methods=["get"], url_path=r"pages/(?P<page_number>\d+)/image")
+    def page_image(self, request: Request, pk: str | None = None, page_number: str = "1"):
+        """The page rendered as PNG. 404 for formats without page images."""
+        document = self.get_object()
+        self._require(DOCUMENT_VIEW.code, str(document.project_id))
+        return page_image_response(document, int(page_number), request)
+
+    @action(detail=True, methods=["get"])
+    def file(self, request: Request, pk: str | None = None):
+        """The original uploaded file of the current version."""
+        document = self.get_object()
+        self._require(DOCUMENT_VIEW.code, str(document.project_id))
+        return original_file_response(document)
+
+    @action(detail=True, methods=["get"])
+    def sections(self, request: Request, pk: str | None = None) -> Response:
+        """Detected clause hierarchy and extracted tables."""
+        document = self.get_object()
+        self._require(DOCUMENT_VIEW.code, str(document.project_id))
+        return Response(sections_payload(document))
+
+    @action(detail=True, methods=["get"])
+    def processing(self, request: Request, pk: str | None = None) -> Response:
+        """The latest ingestion job for the current version, stage by stage."""
+        document = self.get_object()
+        self._require(DOCUMENT_VIEW.code, str(document.project_id))
+        return Response(processing_payload(document))
 
 
 class ProcessingJobViewSet(viewsets.ReadOnlyModelViewSet):

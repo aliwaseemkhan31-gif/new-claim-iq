@@ -424,8 +424,16 @@ def render_sources_block(chunks: Sequence[SourceChunk]) -> str:
     """
     blocks: list[str] = []
     for chunk in chunks:
+        # The layer is stated for every source, so the model can apply the
+        # rule that a project's own contract governs over the standard form.
+        layer = (
+            f"Standard form ({chunk.edition})"
+            if chunk.is_knowledge_base
+            else "Project document"
+        )
         blocks.append(
             f"SOURCE ID: {chunk.ref}\n"
+            f"Source type: {layer}\n"
             f"Reference: {chunk.render_citation()}\n"
             f"Text:\n{chunk.text.strip()}"
         )

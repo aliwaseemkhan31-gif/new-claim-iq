@@ -67,6 +67,27 @@ _DOT_LEADER_RE = re.compile(r"[.·…]{4,}[ \t]*\d{1,4}[ \t]*$")
 #: A line ending in a bare page number, the other contents-page signature.
 _TRAILING_PAGENO_RE = re.compile(r"[A-Za-z’')\]][ \t]{2,}(\d{1,4})[ \t]*$")
 
+#: A numbered contents entry whose page number follows a single space:
+#: "16.1 Contractor's Employees 8". Structurally identical to a heading, so it
+#: is recognised by its trailing page number and its brevity. The FIDIC 1987
+#: printing sets its contents this way, with no dot leaders.
+_CONTENTS_ENTRY_RE = re.compile(
+    r"^[ \t]*\d{1,3}(?:\.\d{1,3}){0,3}[ \t]+"
+    r"(?P<title>[^\n]{2,80}?)"
+    r"[ \t]+\d{1,4}[ \t]*$"
+)
+
+#: A clause number printed inline after a marginal note, with the body text
+#: running on from it: "Substantiation 53.3 Within 28 days, ...". The number is
+#: not at the start of the line, so the line-leading pattern never sees it —
+#: which left every passage of such a document carrying the previous clause's
+#: number, and citations naming the wrong provision.
+_MARGIN_HEADING_RE = re.compile(
+    r"^[ \t]*(?P<title>[A-Z][A-Za-z\u2019'&/()\-, ]{2,60}?)[ \t]+"
+    r"(?P<number>\d{1,3}(?:\.\d{1,3}){1,3})[ \t]+"
+    r'(?P<rest>[A-Z\u201c"(][^\n]{15,})$'
+)
+
 #: Currency / measurement, to keep "1.5 million" and "2.5 m" out of references.
 _UNIT_SUFFIX_RE = re.compile(
     r"^[ \t]*(?:%|million|billion|thousand|m\b|km\b|mm\b|cm\b|kg\b|t\b|"
@@ -246,6 +267,10 @@ def is_contents_line(line: str) -> bool:
         return True
     if _TRAILING_PAGENO_RE.search(stripped):
         return True
+    if len(stripped) <= 110:
+        entry = _CONTENTS_ENTRY_RE.match(stripped)
+        if entry and not entry.group("title").rstrip().endswith((".", ",", ";", ":")):
+            return True
     return False
 
 
@@ -339,6 +364,43 @@ def _score_heading(number: str, title: str, keyword: str | None, line: str) -> f
     return max(0.0, min(1.0, score))
 
 
+def _score_margin_heading(number: str, title: str, rest: str, line: str) -> float:
+    """Confidence that a marginal note plus an inline number is a heading.
+
+    Scored separately from a line-leading heading because the evidence differs:
+    the marginal note is the title, and the provision's text follows on the same
+    line. A reference keyword in the title position ("Sub-Clause 20.2 The
+    Contractor shall ...") is prose, not a heading, and is rejected outright.
+    """
+    if re.fullmatch(_REF_KEYWORD, title.strip(), re.IGNORECASE):
+        return 0.0
+    if is_contents_line(line):
+        return 0.0
+    if len(rest.split()) < 4:
+        return 0.0
+
+    score = 0.5
+
+    words = [w for w in re.split(r"[ \t]+", title) if w]
+    capitalised = sum(1 for w in words if w[:1].isupper())
+    if words and capitalised / len(words) >= 0.6:
+        score += 0.2
+    else:
+        score -= 0.2
+
+    if len(title) <= 40:
+        score += 0.1
+
+    # A marginal note is a label, not a sentence.
+    lowered = " " + title.lower() + " "
+    for token in (" shall ", " means ", " unless ", " if the ", " which "):
+        if token in lowered:
+            score -= 0.4
+            break
+
+    return max(0.0, min(1.0, score))
+
+
 def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], list[int]]:
     """Detect clause headings across ``pages``.
 
@@ -374,6 +436,33 @@ def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], lis
                                 depth=clause_depth(number),
                             )
                         )
+                        offset += len(line) + 1
+                        continue
+
+            # The number may sit inline after a marginal note instead.
+            margin = _MARGIN_HEADING_RE.match(line)
+            if margin:
+                number = normalise_clause_number(margin.group("number"))
+                title = margin.group("title").strip().rstrip(".;:,")
+                if number and title:
+                    confidence = _score_margin_heading(
+                        number, title, margin.group("rest"), line
+                    )
+                    if confidence >= HEADING_MIN_CONFIDENCE:
+                        headings.append(
+                            ClauseHeading(
+                                number=number,
+                                title=title,
+                                page_number=page.page_number,
+                                line_index=line_index,
+                                # The provision starts at its number, not at the
+                                # marginal note, so chunking splits there.
+                                char_offset=offset + margin.start("number"),
+                                confidence=round(confidence, 3),
+                                depth=clause_depth(number),
+                            )
+                        )
+
             offset += len(line) + 1
 
     return headings, skipped

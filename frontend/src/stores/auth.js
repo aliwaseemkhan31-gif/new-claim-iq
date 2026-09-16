@@ -15,6 +15,10 @@ import { ApiError } from '@/api/client'
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
   const permissions = ref([])
+  /** Permissions held on at least one project — for navigation, not for actions. */
+  const projectPermissions = ref([])
+  /** projectId -> permission codes on that project, loaded when a project opens. */
+  const perProject = ref({})
   const organization = ref(null)
   const loading = ref(false)
   const bootstrapped = ref(false)
@@ -43,19 +47,39 @@ export const useAuthStore = defineStore('auth', () => {
   })
 
   const permissionSet = computed(() => new Set(permissions.value))
+  const projectPermissionSet = computed(() => new Set(projectPermissions.value))
 
   /**
-   * A single permission check.
+   * A single permission check, for navigation and page access.
    *
-   * A system administrator passes everything — that exception is explicit
-   * here, matching the backend's permission model, rather than being implied
-   * by whatever happens to be in the permissions array.
+   * True when the user holds the permission through their organization role
+   * or on any project. A system administrator passes everything — that
+   * exception is explicit here, matching the backend's permission model.
+   * Actions on a specific project use `canInProject`.
    */
   function hasPermission(code) {
     if (!isAuthenticated.value) return false
     if (isSystemAdmin.value) return true
     if (!code) return true
-    return permissionSet.value.has(code)
+    return permissionSet.value.has(code) || projectPermissionSet.value.has(code)
+  }
+
+  /** Whether the user may do `code` on one project. Load it first with `loadProjectPermissions`. */
+  function canInProject(projectId, code) {
+    if (!isAuthenticated.value) return false
+    if (isSystemAdmin.value) return true
+    if (!code) return true
+    const codes = perProject.value[projectId]
+    if (!codes) return permissionSet.value.has(code)
+    return codes.includes(code)
+  }
+
+  async function loadProjectPermissions(projectId, { force = false } = {}) {
+    if (!projectId) return []
+    if (perProject.value[projectId] && !force) return perProject.value[projectId]
+    const data = await authApi.fetchProjectPermissions(projectId)
+    perProject.value = { ...perProject.value, [projectId]: data?.permissions ?? [] }
+    return perProject.value[projectId]
   }
 
   /** True when the user holds every code. An empty list is vacuously true. */
@@ -72,12 +96,18 @@ export const useAuthStore = defineStore('auth', () => {
   function applySession(payload) {
     user.value = payload?.user ?? null
     permissions.value = Array.isArray(payload?.permissions) ? payload.permissions : []
+    projectPermissions.value = Array.isArray(payload?.project_permissions)
+      ? payload.project_permissions
+      : []
+    perProject.value = {}
     organization.value = payload?.organization ?? null
   }
 
   function clearSession() {
     user.value = null
     permissions.value = []
+    projectPermissions.value = []
+    perProject.value = {}
     organization.value = null
   }
 
@@ -152,9 +182,12 @@ export const useAuthStore = defineStore('auth', () => {
     isSystemAdmin,
     displayName,
     initials,
+    projectPermissions,
     hasPermission,
     hasAllPermissions,
     hasAnyPermission,
+    canInProject,
+    loadProjectPermissions,
     login,
     logout,
     bootstrap,

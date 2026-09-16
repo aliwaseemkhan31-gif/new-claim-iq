@@ -1,5 +1,5 @@
 <script setup>
-import FeaturePending from '@/components/common/FeaturePending.vue'
+import ReportsPanel from '@/components/domain/ReportsPanel.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 </script>
 
@@ -7,16 +7,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
   <div class="page">
     <PageHeader
       title="Reports"
-      description="Generated submissions, assessments and evidence bundles."
+      description="Generated reports across your projects. Each is a snapshot of the record at the moment it was generated."
     />
-
-    <div class="surface">
-      <FeaturePending
-        icon="pi pi-file-export"
-        title="Reports not available yet"
-        description="Versioned reports generated from project records, each traceable to the evidence it cites. Requires the reports API."
-        endpoint="/api/v1/reports/"
-      />
-    </div>
+    <ReportsPanel show-project />
   </div>
 </template>

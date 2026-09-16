@@ -1,74 +1,60 @@
 /**
- * AI workspace: grounded Q&A, claim analysis jobs, and report generation.
+ * AI: grounded questions, question history, claim analysis and finding review.
  *
- * Every answer the backend returns carries citations. The UI must never render
- * an AI assertion without the citation list that supports it.
+ * Every answer carries citations. The UI must never render an AI assertion
+ * without the citations that support it.
  */
 import { get, post } from './client'
 
-export function ask(
-  { question, projectId, conversationId, editions, documentIds } = {},
-  config = {}
-) {
+/** Local generation on CPU takes tens of seconds; the default 30 s is too short. */
+const GENERATION_TIMEOUT_MS = 10 * 60 * 1000
+
+export function ask({ question, projectId, includeKnowledgeBase = true, documentTypes } = {}, config = {}) {
   return post(
     '/ai/ask/',
     {
       question,
       project: projectId,
-      conversation: conversationId,
-      editions,
-      documents: documentIds,
+      include_knowledge_base: includeKnowledgeBase,
+      document_types: documentTypes,
     },
-    config
+    { timeout: GENERATION_TIMEOUT_MS, ...config }
   )
 }
 
-export function listConversations(params = {}) {
-  return get('/ai/conversations/', { params })
+export function listQuestions(projectId, params = {}, config = {}) {
+  return get('/ai/questions/', { params: { project: projectId, ...params }, ...config })
 }
 
-export function fetchConversation(conversationId) {
-  return get(`/ai/conversations/${conversationId}/`)
+export function fetchQuestion(questionId, config = {}) {
+  return get(`/ai/questions/${questionId}/`, config)
 }
 
-export function startClaimAnalysis({ claimId, projectId, analysisType } = {}) {
-  return post('/ai/analysis/', {
-    claim: claimId,
-    project: projectId,
-    analysis_type: analysisType,
+export function startClaimAnalysis({ claimId, projectId } = {}) {
+  return post('/ai/analysis/', { claim: claimId, project: projectId, analysis_type: 'full' })
+}
+
+export function fetchAnalysis(analysisId, config = {}) {
+  return get(`/ai/analysis/${analysisId}/`, config)
+}
+
+export function listAnalyses(params = {}, config = {}) {
+  return get('/ai/analysis/', { params, ...config })
+}
+
+export function cancelAnalysis(analysisId) {
+  return post(`/ai/analysis/${analysisId}/cancel/`, {})
+}
+
+/** Accept, reject or amend an AI finding. Requires `ai.override`. */
+export function reviewFinding(findingId, { action, reason, amendedStatement }) {
+  return post(`/ai/findings/${findingId}/review/`, {
+    action,
+    reason: reason || '',
+    amended_statement: amendedStatement || '',
   })
 }
 
-export function fetchAnalysis(analysisId) {
-  return get(`/ai/analysis/${analysisId}/`)
-}
-
-export function listAnalyses(params = {}) {
-  return get('/ai/analysis/', { params })
-}
-
-/** Accept / reject / edit an AI finding. Requires `ai.override`. */
-export function reviewFinding(findingId, payload) {
-  return post(`/ai/findings/${findingId}/review/`, payload)
-}
-
-/** Retrieval trace for one answer — what was retrieved and why. */
-export function fetchRetrievalTrace(answerId) {
-  return get(`/ai/answers/${answerId}/trace/`)
-}
-
-export function listModels() {
-  return get('/ai/models/')
-}
-
-export function listReports(params = {}) {
-  return get('/reports/', { params })
-}
-
-export function generateReport(payload) {
-  return post('/reports/', payload)
-}
-
-export function fetchReport(reportId) {
-  return get(`/reports/${reportId}/`)
+export function listModels(config = {}) {
+  return get('/ai/models/', config)
 }

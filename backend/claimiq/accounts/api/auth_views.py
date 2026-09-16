@@ -42,11 +42,36 @@ def _session_payload(user) -> dict:
 
         organization = Organization.objects.filter(pk=context.organization_id).first()
 
+    # Permissions held on at least one project. For navigation only: a member
+    # whose access comes from project roles still needs to see "Claims" in the
+    # sidebar. Every action is checked again against the specific project.
+    project_permissions: set[str] = set()
+    if context.organization_id:
+        if context.is_system_admin:
+            project_permissions = set(context.permissions)
+        else:
+            from claimiq.accounts.domain.permissions import resolve_permissions
+            from claimiq.projects.models import ProjectMember
+
+            roles = (
+                ProjectMember.objects.filter(
+                    user=user,
+                    is_active=True,
+                    project__organization_id=context.organization_id,
+                    project__deleted_at__isnull=True,
+                )
+                .values_list("role", flat=True)
+                .distinct()
+            )
+            for role in roles:
+                project_permissions |= resolve_permissions(None, role)
+
     return {
         "user": UserSerializer(user).data,
         "organization": OrganizationSerializer(organization).data if organization else None,
         "organization_role": context.organization_role,
         "permissions": sorted(context.permissions),
+        "project_permissions": sorted(project_permissions),
         "is_system_admin": context.is_system_admin,
     }
 

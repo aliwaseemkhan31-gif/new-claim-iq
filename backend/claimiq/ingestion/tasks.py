@@ -78,6 +78,11 @@ def process_document(self, job_id: str, dispatch_count: int = 0) -> dict:
             return {"status": "dispatch_limit", "state": state.describe()}
         process_document.apply_async(args=[job_id, dispatch_count + 1], queue="ingestion")
 
+    if job.is_terminal:
+        from claimiq.ingestion.services.completion import on_job_finished
+
+        on_job_finished(job_id)
+
     return {
         "status": job.status,
         "stage": stage.value if stage else None,

@@ -8,7 +8,9 @@ const AuthLayout = () => import('@/layouts/AuthLayout.vue')
 /**
  * Route meta contract:
  *   requiresAuth  — the navigation guard resolves the session first.
- *   permission    — a single permission code the user must hold.
+ *   permission    — a permission the user must hold in the organization or on
+ *                   at least one project. Actions inside a project are checked
+ *                   again against that project.
  *   title         — document title and breadcrumb leaf.
  *   breadcrumb    — override for the crumb label (defaults to `title`).
  */
@@ -113,10 +115,25 @@ export const routes = [
         meta: { title: 'Documents', permission: 'document.view' },
       },
       {
+        // Where a citation into a project document lands.
+        path: 'documents/:documentId',
+        name: 'document-viewer',
+        component: () => import('@/views/DocumentViewerView.vue'),
+        props: true,
+        meta: { title: 'Document', permission: 'document.view', breadcrumb: 'Documents' },
+      },
+      {
         path: 'claims',
         name: 'claims',
         component: () => import('@/views/ClaimsView.vue'),
         meta: { title: 'Claims', permission: 'claim.view' },
+      },
+      {
+        path: 'claims/:claimId',
+        name: 'claim-detail',
+        component: () => import('@/views/ClaimDetailView.vue'),
+        props: true,
+        meta: { title: 'Claim', permission: 'claim.view', breadcrumb: 'Claims' },
       },
       {
         path: 'correspondence',
@@ -155,10 +172,38 @@ export const routes = [
         meta: { title: 'Reports', permission: 'report.view' },
       },
       {
+        path: 'reports/:reportId',
+        name: 'report-detail',
+        component: () => import('@/views/ReportDetailView.vue'),
+        props: true,
+        meta: { title: 'Report', permission: 'report.view', breadcrumb: 'Reports' },
+      },
+      {
         path: 'knowledge-base',
         name: 'knowledge-base',
         component: () => import('@/views/KnowledgeBaseView.vue'),
         meta: { title: 'Knowledge Base' },
+      },
+      {
+        path: 'knowledge-base/:knowledgeBaseId',
+        name: 'knowledge-base-detail',
+        component: () => import('@/views/KnowledgeBaseDetailView.vue'),
+        props: true,
+        meta: { title: 'Edition', breadcrumb: 'Knowledge Base' },
+      },
+      {
+        // Where a citation into standard-form text lands.
+        path: 'knowledge-base/:knowledgeBaseId/pages',
+        name: 'knowledge-base-viewer',
+        component: () => import('@/views/KnowledgeBaseViewerView.vue'),
+        props: true,
+        meta: { title: 'Standard form', breadcrumb: 'Knowledge Base' },
+      },
+      {
+        path: 'notifications',
+        name: 'notifications',
+        component: () => import('@/views/NotificationsView.vue'),
+        meta: { title: 'Notifications' },
       },
       {
         path: 'administration',

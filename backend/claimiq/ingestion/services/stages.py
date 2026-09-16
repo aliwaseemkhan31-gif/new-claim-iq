@@ -13,11 +13,13 @@ it.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 
 from claimiq.core.domain.errors import ExtractionError, ProcessingError
 from claimiq.core.logging import get_logger
@@ -33,10 +35,27 @@ from claimiq.ingestion.domain import chunking as chunking_domain
 from claimiq.ingestion.domain import clause_detection as clause_domain
 from claimiq.ingestion.domain import quality as quality_domain
 from claimiq.ingestion.domain.file_safety import enforce_safety
+from claimiq.ingestion.domain.layout import FileKind, render_table_text
 from claimiq.ingestion.domain.pipeline import Stage
-from claimiq.ingestion.providers.extraction import DocTROCRProvider, PdfPlumberExtractor
+from claimiq.ingestion.providers.extraction import (
+    OfficeExtractor,
+    PageAnalysis,
+    PdfPlumberExtractor,
+    build_ocr_provider,
+    image_page_analyses,
+)
+from claimiq.ingestion.providers.pages import sniff_file_kind
 
 logger = get_logger("ingestion.stages")
+
+#: Chunks sent to the embedding model per request.
+EMBED_BATCH_SIZE = 16
+
+#: Pages OCR'd between checkpoints. At ~12 s a page on CPU, a checkpoint every
+#: 8 pages bounds the work lost to a crash to under two minutes.
+OCR_BATCH_SIZE = 8
+
+_OFFICE_KINDS = (FileKind.DOCX, FileKind.XLSX, FileKind.TEXT)
 
 
 @dataclass
@@ -44,17 +63,34 @@ class StageContext:
     """Everything a stage executor needs.
 
     ``checkpoint`` carries the previous attempt's progress, so a resumed stage
-    can skip what it already did.
+    can skip what it already did. ``prior_metrics`` carries what earlier stages
+    reported: completing a stage clears its checkpoint, so anything a later
+    stage needs (page analysis, detected headings) travels in metrics.
     """
 
     version: DocumentVersion
     checkpoint: dict[str, Any]
     cancel_requested: Callable[[], bool]
     record_checkpoint: Callable[..., None]
+    prior_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def file_path(self) -> str:
         return self.version.file.path
+
+    def prior(self, stage: Stage) -> dict[str, Any]:
+        return self.prior_metrics.get(stage.value) or {}
+
+    @property
+    def file_kind(self) -> FileKind:
+        recorded = self.prior(Stage.ANALYSE).get("file_kind")
+        if recorded:
+            return FileKind(recorded)
+        return sniff_file_kind(
+            self.file_path,
+            filename=self.version.original_filename,
+            content_type=self.version.content_type,
+        )
 
     def check_cancelled(self) -> None:
         """Cooperative cancellation between units of work.
@@ -104,20 +140,72 @@ def run_validate(ctx: StageContext) -> dict[str, Any]:
 
 
 def run_analyse(ctx: StageContext) -> dict[str, Any]:
-    """Classify each page as digital or scanned, and detect tables."""
-    analyses = PdfPlumberExtractor().analyse(ctx.file_path)
+    """Decide how the file is read, then classify each page.
+
+    PDFs are classified per page as digital or scanned. Images are scanned by
+    definition. DOCX, XLSX and text have no pages and are paginated. Legacy
+    binary Office files and anything else fail here, with the reason and a
+    remedy, rather than later with no text.
+    """
+    version = ctx.version
+    kind = sniff_file_kind(
+        ctx.file_path, filename=version.original_filename, content_type=version.content_type
+    )
+
+    if kind is FileKind.PDF:
+        analyses = PdfPlumberExtractor().analyse(ctx.file_path)
+    elif kind is FileKind.IMAGE:
+        analyses = image_page_analyses(ctx.file_path)
+    elif kind in _OFFICE_KINDS:
+        pages = OfficeExtractor().extract(ctx.file_path, kind)
+        if not pages:
+            raise ExtractionError(
+                "The document contains no extractable text.",
+                details={"file_kind": kind.value},
+            )
+        analyses = [
+            PageAnalysis(
+                page_number=p.page_number,
+                digital_character_count=len(p.text),
+                needs_ocr=False,
+                has_tables=False,
+            )
+            for p in pages
+        ]
+    elif kind is FileKind.LEGACY_OFFICE:
+        raise ExtractionError(
+            "This is a Word 97–2003 or Excel 97–2003 file. It is stored, but its "
+            "text cannot be extracted offline.",
+            details={
+                "file_kind": kind.value,
+                "remedy": "Save it as PDF, DOCX or XLSX and upload that as a new version.",
+            },
+        )
+    else:
+        raise ExtractionError(
+            "Text cannot be extracted from this file type.",
+            details={
+                "file_kind": kind.value,
+                "remedy": "Upload a PDF, image (PNG, JPEG, TIFF), DOCX, XLSX or text file.",
+            },
+        )
 
     needs_ocr = [a.page_number for a in analyses if a.needs_ocr]
     has_tables = [a.page_number for a in analyses if a.has_tables]
 
-    version = ctx.version
     version.page_count = len(analyses)
     version.save(update_fields=["page_count", "updated_at"])
 
-    # Persist the per-page geometry now so later stages have it even if they
-    # run in a different worker process.
-    ctx.record_checkpoint(
-        page_analysis={
+    return {
+        "file_kind": kind.value,
+        "page_count": len(analyses),
+        "pages_needing_ocr": len(needs_ocr),
+        "pages_with_tables": len(has_tables),
+        "requires_ocr": bool(needs_ocr),
+        "requires_table_extraction": bool(has_tables),
+        # Carried in metrics, not the checkpoint: completion clears checkpoints,
+        # and every later stage needs this.
+        "page_analysis": {
             str(a.page_number): {
                 "needs_ocr": a.needs_ocr,
                 "has_tables": a.has_tables,
@@ -127,36 +215,42 @@ def run_analyse(ctx: StageContext) -> dict[str, Any]:
                 "rotation": a.rotation,
             }
             for a in analyses
-        }
-    )
-
-    return {
-        "page_count": len(analyses),
-        "pages_needing_ocr": len(needs_ocr),
-        "pages_with_tables": len(has_tables),
-        "requires_ocr": bool(needs_ocr),
-        "requires_table_extraction": bool(has_tables),
+        },
     }
 
 
 def _analysis_map(ctx: StageContext) -> dict[int, dict[str, Any]]:
-    raw = ctx.checkpoint.get("page_analysis") or {}
+    raw = ctx.prior(Stage.ANALYSE).get("page_analysis") or {}
     return {int(k): v for k, v in raw.items()}
 
 
 @transaction.atomic
 def run_extract_text(ctx: StageContext) -> dict[str, Any]:
-    """Extract the digital text layer.
+    """Extract text that needs no OCR.
 
-    Idempotent: pages for this version are replaced wholesale.
+    Idempotent: digital pages for this version are replaced wholesale.
     """
     version = ctx.version
+    kind = ctx.file_kind
     analysis = _analysis_map(ctx)
-    digital_pages = [n for n, a in analysis.items() if not a.get("needs_ocr")]
 
-    extracted = PdfPlumberExtractor().extract(ctx.file_path, page_numbers=digital_pages or None)
+    if kind is FileKind.PDF:
+        digital_pages = sorted(n for n, a in analysis.items() if not a.get("needs_ocr"))
+        extracted = (
+            PdfPlumberExtractor().extract(ctx.file_path, page_numbers=digital_pages)
+            if digital_pages
+            else []
+        )
+    elif kind in _OFFICE_KINDS:
+        extracted = OfficeExtractor().extract(ctx.file_path, kind)
+    else:
+        extracted = []
 
     DocumentPage.objects.filter(version=version, extraction_method=ExtractionMethod.DIGITAL).delete()
+
+    if extracted and version.extraction_method == ExtractionMethod.NONE:
+        version.extraction_method = ExtractionMethod.DIGITAL
+        version.save(update_fields=["extraction_method", "updated_at"])
 
     rows = [
         DocumentPage(
@@ -194,9 +288,9 @@ def run_ocr(ctx: StageContext) -> dict[str, Any]:
     if not remaining:
         return {"pages_ocr": 0, "resumed_from": resume_from, "note": "nothing outstanding"}
 
-    provider = DocTROCRProvider()
-    batch = 8
-    processed = 0
+    provider = build_ocr_provider()
+    batch = OCR_BATCH_SIZE
+    processed = int(ctx.checkpoint.get("pages_done", 0))
     confidences: list[float] = []
 
     for offset in range(0, len(remaining), batch):
@@ -215,6 +309,8 @@ def run_ocr(ctx: StageContext) -> dict[str, Any]:
                         page_number=page.page_number,
                         text=page.text,
                         ocr_confidence=page.confidence,
+                        width=analysis.get(page.page_number, {}).get("width"),
+                        height=analysis.get(page.page_number, {}).get("height"),
                         rotation=analysis.get(page.page_number, {}).get("rotation", 0),
                         extraction_method=ExtractionMethod.OCR,
                         has_tables=bool(
@@ -237,6 +333,7 @@ def run_ocr(ctx: StageContext) -> dict[str, Any]:
     version.save(update_fields=["extraction_method", "updated_at"])
 
     return {
+        "provider": provider.provider_key,
         "pages_ocr": processed,
         "resumed_from": resume_from,
         "mean_confidence": (
@@ -295,8 +392,14 @@ def run_detect_clauses(ctx: StageContext) -> dict[str, Any]:
     pages = _content_pages(version)
     result = clause_domain.detect(pages)
 
-    ctx.record_checkpoint(
-        headings=[
+    return {
+        "heading_count": len(result.headings),
+        "citations": len(result.citations),
+        "roots": len(result.roots),
+        "skipped_pages": len(result.skipped_pages),
+        # Carried in metrics so ASSEMBLE_SECTIONS and CHUNK can read them after
+        # this stage's checkpoint is cleared on completion.
+        "headings": [
             {
                 "number": h.number,
                 "title": h.title,
@@ -306,46 +409,13 @@ def run_detect_clauses(ctx: StageContext) -> dict[str, Any]:
                 "depth": h.depth,
             }
             for h in result.headings
-        ]
-    )
-
-    return {
-        "headings": len(result.headings),
-        "citations": len(result.citations),
-        "roots": len(result.roots),
-        "skipped_pages": len(result.skipped_pages),
+        ],
     }
 
 
-def run_extract_tables(ctx: StageContext) -> dict[str, Any]:
-    """Table extraction.
-
-    Not implemented. The stage exists in the pipeline and is reported honestly
-    rather than silently succeeding — a stage that claims success while doing
-    nothing is worse than one that admits it is pending, because downstream
-    quality scoring would treat missing tables as an extraction that found none.
-    """
-    raise ProcessingError(
-        "Table extraction is not implemented in this release.",
-        details={
-            "stage": Stage.EXTRACT_TABLES.value,
-            "remedy": (
-                "Documents with tables are processed without table structure. "
-                "Disable table detection to skip this stage."
-            ),
-        },
-    )
-
-
-@transaction.atomic
-def run_assemble_sections(ctx: StageContext) -> dict[str, Any]:
-    """Persist the detected clause hierarchy as DocumentSection rows."""
-    version = ctx.version
-    stored = ctx.checkpoint.get("headings") or []
-    if not stored:
-        return {"sections": 0, "note": "no clause structure detected"}
-
-    headings = [
+def _stored_headings(ctx: StageContext) -> list[clause_domain.ClauseHeading]:
+    stored = ctx.prior(Stage.DETECT_CLAUSES).get("headings") or []
+    return [
         clause_domain.ClauseHeading(
             number=h["number"],
             title=h["title"],
@@ -357,9 +427,76 @@ def run_assemble_sections(ctx: StageContext) -> dict[str, Any]:
         )
         for h in stored
     ]
-    roots = clause_domain.build_hierarchy(headings)
 
-    DocumentSection.objects.filter(version=version).delete()
+
+@transaction.atomic
+def run_extract_tables(ctx: StageContext) -> dict[str, Any]:
+    """Extract table structure from digital PDF pages.
+
+    Each table is stored as a TABLE section holding its rows as pipe-separated
+    lines, so a bill of quantities or rate schedule can be read and cited as a
+    table rather than as the run-together text of its cells. Scanned pages are
+    not table-extracted (their tables are still OCR'd as text), and that is
+    reported in the metrics.
+    """
+    version = ctx.version
+    analysis = _analysis_map(ctx)
+    table_pages = sorted(n for n, a in analysis.items() if a.get("has_tables"))
+    digital = [n for n in table_pages if not analysis[n].get("needs_ocr")]
+
+    DocumentSection.objects.filter(version=version, kind=DocumentSection.SectionKind.TABLE).delete()
+
+    if ctx.file_kind is not FileKind.PDF or not digital:
+        return {"tables": 0, "pages_with_tables": 0, "scanned_pages_not_extracted": len(table_pages) - len(digital)}
+
+    tables = PdfPlumberExtractor().extract_tables(ctx.file_path, page_numbers=digital)
+
+    rows: list[DocumentSection] = []
+    per_page: dict[int, int] = {}
+    for page_number, cells in tables:
+        text = render_table_text(cells)
+        if not text:
+            continue
+        per_page[page_number] = per_page.get(page_number, 0) + 1
+        index = per_page[page_number]
+        rows.append(
+            DocumentSection(
+                version=version,
+                kind=DocumentSection.SectionKind.TABLE,
+                title=f"Table {index} on page {page_number}",
+                depth=1,
+                # Tables sort after the clause hierarchy, in page order.
+                sequence=1_000_000 + page_number * 100 + index,
+                start_page=page_number,
+                end_page=page_number,
+                text=text,
+            )
+        )
+    DocumentSection.objects.bulk_create(rows, batch_size=200)
+    DocumentPage.objects.filter(version=version, page_number__in=list(per_page)).update(has_tables=True)
+
+    return {
+        "tables": len(rows),
+        "pages_with_tables": len(per_page),
+        "scanned_pages_not_extracted": len(table_pages) - len(digital),
+    }
+
+
+@transaction.atomic
+def run_assemble_sections(ctx: StageContext) -> dict[str, Any]:
+    """Persist the detected clause hierarchy as DocumentSection rows."""
+    version = ctx.version
+    headings = _stored_headings(ctx)
+
+    # Only clause sections are replaced; tables belong to EXTRACT_TABLES.
+    DocumentSection.objects.filter(
+        version=version, kind=DocumentSection.SectionKind.CLAUSE
+    ).delete()
+
+    if not headings:
+        return {"sections": 0, "note": "no clause structure detected"}
+
+    roots = clause_domain.build_hierarchy(headings)
 
     created: dict[str, DocumentSection] = {}
     sequence = 0
@@ -397,19 +534,7 @@ def run_chunk(ctx: StageContext) -> dict[str, Any]:
     if not pages:
         raise ExtractionError("No content pages available to chunk.")
 
-    stored = ctx.checkpoint.get("headings") or []
-    headings = [
-        clause_domain.ClauseHeading(
-            number=h["number"],
-            title=h["title"],
-            page_number=int(h["page"]),
-            line_index=0,
-            char_offset=int(h["offset"]),
-            confidence=float(h["confidence"]),
-            depth=int(h["depth"]),
-        )
-        for h in stored
-    ]
+    headings = _stored_headings(ctx)
 
     chunks = chunking_domain.chunk_document(pages, headings)
 
@@ -451,23 +576,71 @@ def run_chunk(ctx: StageContext) -> dict[str, Any]:
 
 
 def run_embed(ctx: StageContext) -> dict[str, Any]:
-    """Generate embeddings.
+    """Embed every chunk with the configured embedding model.
 
-    Not implemented: the embedding provider is Phase 3. Raised rather than
-    quietly skipped so a document is never reported as fully processed while
-    being invisible to vector retrieval.
+    Resumable without a checkpoint: only chunks lacking an embedding from the
+    configured model are sent, so a restarted stage continues where it stopped
+    and a model change re-embeds everything. Batches commit independently.
+
+    Raises:
+        ProcessingError: no model configured, or the model returned vectors of
+            the wrong width. A width mismatch must fail loudly — storing it
+            would corrupt the index in a way that surfaces much later as
+            inexplicably poor retrieval.
     """
-    raise ProcessingError(
-        "Embedding generation is not implemented in this release.",
-        details={
-            "stage": Stage.EMBED.value,
-            "remedy": (
-                "Documents are extracted, structured and chunked, and are "
-                "searchable lexically once indexed. Vector retrieval requires "
-                "the embedding provider from Phase 3."
-            ),
-        },
+    from claimiq.ai.providers.ollama import OllamaEmbeddingProvider
+
+    ai_settings = settings.AI_SETTINGS
+    model = ai_settings.get("DEFAULT_EMBEDDING_MODEL") or ""
+    if not model:
+        raise ProcessingError(
+            "No embedding model is configured.",
+            details={"stage": Stage.EMBED.value, "remedy": "Set DEFAULT_EMBEDDING_MODEL."},
+        )
+    expected = int(ai_settings["EMBEDDING_DIMENSIONS"])
+    provider = OllamaEmbeddingProvider(
+        ai_settings["OLLAMA_BASE_URL"], ai_settings["OLLAMA_TIMEOUT_SECONDS"]
     )
+
+    version = ctx.version
+    pending = list(
+        DocumentChunk.objects.filter(version=version)
+        .filter(Q(embedding__isnull=True) | ~Q(embedding_model=model))
+        .order_by("sequence")
+        .values_list("id", "embedding_text", "text")
+    )
+
+    embedded = 0
+    for offset in range(0, len(pending), EMBED_BATCH_SIZE):
+        ctx.check_cancelled()
+        batch = pending[offset : offset + EMBED_BATCH_SIZE]
+        result = provider.embed(model, [embedding_text or text for _, embedding_text, text in batch])
+        widths = {len(vector) for vector in result.vectors}
+        if len(result.vectors) != len(batch) or widths != {expected}:
+            raise ProcessingError(
+                "The embedding model returned vectors that do not fit the index.",
+                details={
+                    "stage": Stage.EMBED.value,
+                    "expected_dimensions": expected,
+                    "received_dimensions": sorted(widths),
+                    "remedy": "Use an embedding model matching EMBEDDING_DIMENSIONS.",
+                },
+            )
+        now = timezone.now()
+        with transaction.atomic():
+            for (chunk_id, _embedding_text, _text), vector in zip(batch, result.vectors):
+                DocumentChunk.objects.filter(pk=chunk_id).update(
+                    embedding=list(vector), embedding_model=model, embedded_at=now
+                )
+        embedded += len(batch)
+        ctx.record_checkpoint(embedded=embedded)
+
+    return {
+        "chunks_embedded": embedded,
+        "chunks_total": DocumentChunk.objects.filter(version=version).count(),
+        "model": model,
+        "dimensions": expected,
+    }
 
 
 @transaction.atomic

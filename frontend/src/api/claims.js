@@ -1,12 +1,12 @@
-/** Claims, their evidence links, and human assessments. */
+/** Claims, their issues, events and evidence, and the computed checks on them. */
 import { del, get, patch, post } from './client'
 
-export function listClaims(params = {}) {
-  return get('/claims/', { params })
+export function listClaims(params = {}, config = {}) {
+  return get('/claims/', { params, ...config })
 }
 
-export function fetchClaim(claimId) {
-  return get(`/claims/${claimId}/`)
+export function fetchClaim(claimId, config = {}) {
+  return get(`/claims/${claimId}/`, config)
 }
 
 export function createClaim(payload) {
@@ -22,30 +22,69 @@ export function deleteClaim(claimId) {
 }
 
 /** Record a human determination. Distinct from an AI finding, always. */
-export function assessClaim(claimId, payload) {
-  return post(`/claims/${claimId}/assess/`, payload)
+export function assessClaim(claimId, { outcome, assessment }) {
+  return post(`/claims/${claimId}/assess/`, { outcome, assessment })
 }
 
-export function listClaimEvidence(claimId, params = {}) {
-  return get(`/claims/${claimId}/evidence/`, { params })
+export function listClaimIssues(claimId, config = {}) {
+  return get(`/claims/${claimId}/issues/`, config)
 }
 
-export function linkEvidence(claimId, payload) {
-  return post(`/claims/${claimId}/evidence/`, payload)
+export function createClaimIssue(claimId, payload) {
+  return post(`/claims/${claimId}/issues/`, payload)
 }
 
-export function unlinkEvidence(claimId, evidenceId) {
-  return del(`/claims/${claimId}/evidence/${evidenceId}/`)
+export function updateClaimIssue(claimId, issueId, payload) {
+  return patch(`/claims/${claimId}/issues/${issueId}/`, payload)
 }
 
-export function listEvidence(params = {}) {
-  return get('/evidence/', { params })
+export function deleteClaimIssue(claimId, issueId) {
+  return del(`/claims/${claimId}/issues/${issueId}/`)
 }
 
-export function listCorrespondence(params = {}) {
-  return get('/correspondence/', { params })
+export function fetchClaimTimeline(claimId, params = {}, config = {}) {
+  return get(`/claims/${claimId}/timeline/`, { params, ...config })
 }
 
-export function fetchCorrespondence(correspondenceId) {
-  return get(`/correspondence/${correspondenceId}/`)
+/** Deterministic: what the claim must establish against the evidence on record. */
+export function fetchEvidenceGaps(claimId, config = {}) {
+  return get(`/claims/${claimId}/evidence-gaps/`, config)
+}
+
+/** Deterministic notice timing, computed from recorded dates. */
+export function fetchNoticeCompliance(claimId, config = {}) {
+  return get(`/claims/${claimId}/notice-compliance/`, config)
+}
+
+export function listEvidence(params = {}, config = {}) {
+  return get('/evidence/', { params, ...config })
+}
+
+export function createEvidence(payload) {
+  return post('/evidence/', payload)
+}
+
+/** Editing relevance is attributed as a review by the server. */
+export function updateEvidence(evidenceId, payload) {
+  return patch(`/evidence/${evidenceId}/`, payload)
+}
+
+export function deleteEvidence(evidenceId) {
+  return del(`/evidence/${evidenceId}/`)
+}
+
+export function listClaimEvents(params = {}, config = {}) {
+  return get('/claims/events/', { params, ...config })
+}
+
+export function createClaimEvent(payload) {
+  return post('/claims/events/', payload)
+}
+
+export function updateClaimEvent(eventId, payload) {
+  return patch(`/claims/events/${eventId}/`, payload)
+}
+
+export function deleteClaimEvent(eventId) {
+  return del(`/claims/events/${eventId}/`)
 }

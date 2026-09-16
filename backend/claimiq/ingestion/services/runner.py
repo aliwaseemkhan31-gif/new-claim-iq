@@ -24,19 +24,34 @@ logger = get_logger("ingestion.runner")
 
 
 def embedding_provider_available() -> bool:
-    """Whether this deployment can generate embeddings.
+    """Whether this deployment can generate embeddings right now.
 
-    Returns False in this release: the embedding provider is Phase 3. Stated as
-    a capability check rather than a hardcoded skip so that enabling it is a
-    one-line change here once the provider exists, and so the reason surfaces
-    to the operator instead of the stage silently vanishing.
+    Requires a configured model and a reachable runtime. When False the EMBED
+    stage is skipped with its reason recorded: the document is lexically
+    searchable, and a later reprocess from EMBED adds vectors.
     """
-    return False
+    from django.conf import settings
+
+    ai_settings = settings.AI_SETTINGS
+    if not ai_settings.get("DEFAULT_EMBEDDING_MODEL"):
+        return False
+    from claimiq.ai.providers.ollama import OllamaEmbeddingProvider
+
+    provider = OllamaEmbeddingProvider(ai_settings["OLLAMA_BASE_URL"], 5)
+    check = getattr(provider, "is_available", None)
+    try:
+        return bool(check()) if callable(check) else True
+    except Exception:  # noqa: BLE001 - an unreachable runtime is a capability fact
+        return False
 
 
 def table_extraction_available() -> bool:
-    """Whether this deployment can extract table structure. Not yet implemented."""
-    return False
+    """Whether table structure can be extracted (pdfplumber is installed)."""
+    try:
+        import pdfplumber  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _resolve_capabilities(state: PipelineState, analyse_metrics: dict[str, Any]) -> None:
@@ -124,6 +139,7 @@ def run_next_stage(job: ProcessingJob) -> Stage | None:
         checkpoint=checkpoint,
         cancel_requested=lambda: _cancel_requested(job),
         record_checkpoint=record_checkpoint,
+        prior_metrics={s.value: dict(o.metrics) for s, o in state.outcomes.items()},
     )
 
     state.start(stage)

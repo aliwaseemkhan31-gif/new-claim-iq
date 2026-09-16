@@ -155,10 +155,44 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         from claimiq.documents.models import Document, DocumentVersion, ProcessingStatus
 
+        from claimiq.analysis.models import AIFinding, ClaimAnalysis
+        from claimiq.claims.models import Claim, ClaimEvent, Evidence
+        from claimiq.correspondence.models import Correspondence, Notice
+        from claimiq.knowledge.models import KnowledgeBase, KnowledgeBaseStatus
+
         documents = Document.objects.filter(project=project)
+        kb = (
+            KnowledgeBase.objects.filter(
+                organization_id=project.organization_id, edition_code=project.contract_edition
+            ).first()
+            if project.contract_edition
+            else None
+        )
         return Response(
             {
                 "project": str(project.id),
+                "claims": Claim.objects.filter(project=project).count(),
+                "correspondence": Correspondence.objects.filter(project=project).count(),
+                "notices": Notice.objects.filter(
+                    project=project, correspondence__deleted_at__isnull=True
+                ).count(),
+                "evidence": Evidence.objects.filter(project=project).count(),
+                "events": ClaimEvent.objects.filter(project=project).count(),
+                "analyses": ClaimAnalysis.objects.filter(project=project).count(),
+                "findings_unreviewed": AIFinding.objects.filter(
+                    analysis__project=project, reviews__isnull=True
+                ).count(),
+                # Whether standard-form text for this project's edition can be
+                # retrieved at all — the question every AI answer depends on.
+                "knowledge_base": (
+                    {
+                        "id": str(kb.pk),
+                        "status": kb.status,
+                        "is_retrievable": kb.status == KnowledgeBaseStatus.PUBLISHED,
+                    }
+                    if kb
+                    else None
+                ),
                 "documents": documents.count(),
                 "documents_processing": DocumentVersion.objects.filter(
                     document__project=project,
@@ -176,14 +210,176 @@ class ProjectViewSet(viewsets.ModelViewSet):
             }
         )
 
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get", "post"])
     def members(self, request: Request, pk: str | None = None) -> Response:
+        """Project members. Adding one requires ``project.members.manage``."""
         project = self.get_object()
         context = access_for(request, pk)
-        if context is None or not context.has(PROJECT_VIEW.code):
-            raise PermissionDeniedError("Not permitted.")
-        queryset = project.members.select_related("user").filter(is_active=True)
-        return Response(ProjectMemberSerializer(queryset, many=True).data)
+        if request.method == "GET":
+            if context is None or not context.has(PROJECT_VIEW.code):
+                raise PermissionDeniedError("Not permitted.")
+            queryset = project.members.select_related("user").filter(is_active=True)
+            return Response(ProjectMemberSerializer(queryset, many=True).data)
+
+        from claimiq.accounts.domain.permissions import PROJECT_MANAGE_MEMBERS, PROJECT_ROLES
+        from claimiq.accounts.models import OrganizationMembership
+        from claimiq.accounts.services.access import invalidate_access
+
+        if context is None or not context.has(PROJECT_MANAGE_MEMBERS.code):
+            raise PermissionDeniedError(
+                "You do not have permission to manage this project's members.",
+                details={"required_permission": PROJECT_MANAGE_MEMBERS.code},
+            )
+        role = str(request.data.get("role") or "")
+        valid_roles = {r.code for r in PROJECT_ROLES}
+        if role not in valid_roles:
+            raise ValidationError("Unknown project role.", details={"field": "role", "valid": sorted(valid_roles)})
+        user_id = request.data.get("user")
+        membership = (
+            OrganizationMembership.objects.select_related("user")
+            .filter(organization_id=project.organization_id, user_id=user_id, is_active=True)
+            .first()
+            if user_id
+            else None
+        )
+        if membership is None:
+            raise ValidationError(
+                "The user must be an active member of the organization.", details={"field": "user"}
+            )
+        member, _created = ProjectMember.objects.update_or_create(
+            project=project,
+            user=membership.user,
+            defaults={"role": role, "is_active": True, "updated_by": request.user},
+        )
+        invalidate_access(membership.user.pk)
+        return Response(ProjectMemberSerializer(member).data, status=201)
+
+    @action(detail=True, methods=["patch", "delete"], url_path=r"members/(?P<member_id>[^/.]+)")
+    def member_detail(self, request: Request, pk: str | None = None, member_id: str | None = None) -> Response:
+        from uuid import UUID
+
+        from claimiq.accounts.domain.permissions import PROJECT_MANAGE_MEMBERS, PROJECT_ROLES
+        from claimiq.accounts.services.access import invalidate_access
+        from claimiq.core.domain.errors import NotFoundError
+
+        project = self.get_object()
+        self._require_project(request, pk, PROJECT_MANAGE_MEMBERS)
+        try:
+            member = project.members.select_related("user").filter(pk=UUID(str(member_id))).first()
+        except ValueError:
+            member = None
+        if member is None:
+            raise NotFoundError("The requested member does not exist on this project.")
+        if member.user_id == request.user.pk:
+            raise ValidationError("You cannot change your own project membership.")
+
+        if request.method == "DELETE":
+            member.is_active = False
+        else:
+            role = request.data.get("role")
+            if role is not None:
+                valid_roles = {r.code for r in PROJECT_ROLES}
+                if role not in valid_roles:
+                    raise ValidationError("Unknown project role.", details={"field": "role", "valid": sorted(valid_roles)})
+                member.role = role
+        member.updated_by = request.user
+        member.save()
+        invalidate_access(member.user_id)
+        if request.method == "DELETE":
+            return Response(status=204)
+        return Response(ProjectMemberSerializer(member).data)
+
+    def _require_project(self, request: Request, pk, permission) -> None:
+        context = access_for(request, pk)
+        if context is None or not context.has(permission.code):
+            raise PermissionDeniedError(
+                "You do not have permission to perform this action on this project.",
+                details={"required_permission": permission.code},
+            )
+
+    @action(detail=True, methods=["get", "post"])
+    def parties(self, request: Request, pk: str | None = None) -> Response:
+        """The project's parties. Claimants, respondents, senders and recipients are chosen from these."""
+        project = self.get_object()
+        if request.method == "GET":
+            self._require_project(request, pk, PROJECT_VIEW)
+            return Response(
+                PartySerializer(project.parties.order_by("role", "name"), many=True).data
+            )
+        self._require_project(request, pk, PROJECT_EDIT)
+        serializer = PartySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        party = serializer.save(project=project, created_by=request.user)
+        return Response(PartySerializer(party).data, status=201)
+
+    @action(detail=True, methods=["patch", "delete"], url_path=r"parties/(?P<party_id>[^/.]+)")
+    def party_detail(self, request: Request, pk: str | None = None, party_id: str | None = None) -> Response:
+        from uuid import UUID
+
+        project = self.get_object()
+        self._require_project(request, pk, PROJECT_EDIT)
+        try:
+            party = project.parties.filter(pk=UUID(str(party_id))).first()
+        except ValueError:
+            party = None
+        if party is None:
+            from claimiq.core.domain.errors import NotFoundError
+
+            raise NotFoundError("The requested party does not exist on this project.")
+        if request.method == "DELETE":
+            # References from claims and correspondence are SET_NULL; the raw
+            # names recorded on correspondence are kept.
+            party.delete()
+            return Response(status=204)
+        serializer = PartySerializer(party, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        return Response(PartySerializer(serializer.save(updated_by=request.user)).data)
+
+    @action(detail=True, methods=["get"])
+    def timeline(self, request: Request, pk: str | None = None) -> Response:
+        """The project chronology across every claim, with conflicts and gaps surfaced."""
+        from claimiq.claims.api.views import _render_entry
+        from claimiq.claims.domain.chronology import EntryKind
+        from claimiq.claims.services.timeline import build_project_chronology
+
+        project = self.get_object()
+        self._require_project(request, pk, PROJECT_VIEW)
+
+        kinds = None
+        if raw := request.query_params.get("kinds"):
+            try:
+                kinds = [EntryKind(k.strip()) for k in raw.split(",") if k.strip()]
+            except ValueError:
+                raise ValidationError(
+                    "Unknown timeline entry kind.",
+                    details={"valid": [k.value for k in EntryKind]},
+                ) from None
+
+        chronology = build_project_chronology(
+            project_id=project.pk,
+            claim_id=None,
+            include_unreviewed=request.query_params.get("include_unreviewed", "true") != "false",
+            kinds=kinds,
+        )
+        return Response(
+            {
+                "summary": chronology.summary(),
+                "span": [d.isoformat() for d in chronology.span] if chronology.span else None,
+                "unreviewed_count": chronology.unreviewed_count,
+                "unsourced_count": chronology.unsourced_count,
+                "entries": [_render_entry(e) for e in chronology.entries],
+                "undated": [_render_entry(e) for e in chronology.undated],
+                "conflicts": [
+                    {
+                        "title": c.title,
+                        "dates": [d.isoformat() for d in c.dates],
+                        "description": c.describe(),
+                        "entry_ids": [e.entry_id for e in c.entries],
+                    }
+                    for c in chronology.conflicts
+                ],
+            }
+        )
 
 
 class EditionListView(viewsets.ViewSet):

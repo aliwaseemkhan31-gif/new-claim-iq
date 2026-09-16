@@ -25,8 +25,21 @@ EMBEDDING_DIMENSIONS = settings.AI_SETTINGS["EMBEDDING_DIMENSIONS"]
 
 
 class KnowledgeBaseStatus(models.TextChoices):
+    """Lifecycle. Only PUBLISHED is retrievable.
+
+    draft → processing → validating → ready → published
+                       ↘ failed      ↘ quarantined
+    """
+
     DRAFT = "draft", "Draft"
+    PROCESSING = "processing", "Processing source"
+    """The source document is running through the ingestion pipeline."""
+
+    FAILED = "failed", "Processing failed"
     VALIDATING = "validating", "Validating"
+    READY = "ready", "Ready to publish"
+    """Validated with no blocking findings. Awaiting an explicit publish."""
+
     PUBLISHED = "published", "Published"
     QUARANTINED = "quarantined", "Quarantined"
     """Validation found blocking contamination. Not retrievable."""
@@ -54,8 +67,33 @@ class KnowledgeBase(BaseSoftDeleteModel):
         db_index=True,
     )
 
+    source_document = models.ForeignKey(
+        "documents.Document",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="knowledge_bases",
+        help_text=(
+            "The organization-level reference document the edition was built "
+            "from. It runs through the same ingestion pipeline as project "
+            "documents but has no project, so it never appears in project "
+            "retrieval (docs/PHASE7.md, D2)."
+        ),
+    )
     source_filename = models.CharField(max_length=512, blank=True)
     source_checksum = models.CharField(max_length=64, blank=True)
+
+    build_error = models.TextField(
+        blank=True, help_text="Why the last build failed. Operator-facing."
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
 
     chunk_count = models.PositiveIntegerField(default=0)
     validated_at = models.DateTimeField(null=True, blank=True)

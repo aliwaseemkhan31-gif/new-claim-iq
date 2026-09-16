@@ -176,6 +176,51 @@ class ClaimViewSet(viewsets.ModelViewSet):
         )
         return Response(ClaimSerializer(claim).data)
 
+    @action(detail=True, methods=["get", "post"])
+    def issues(self, request: Request, pk: str | None = None) -> Response:
+        """The claim's issues — entitlement, notice, causation, quantum… — each assessable on its own."""
+        claim = self.get_object()
+        if request.method == "GET":
+            self._require(CLAIM_VIEW.code, str(claim.project_id))
+            return Response(ClaimIssueSerializer(claim.issues.all(), many=True).data)
+        self._require(CLAIM_EDIT.code, str(claim.project_id))
+        serializer = ClaimIssueSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        extra = {}
+        if serializer.validated_data.get("human_outcome") or serializer.validated_data.get("human_assessment"):
+            self._require(CLAIM_ASSESS.code, str(claim.project_id))
+            extra = {"assessed_by": request.user, "assessed_at": timezone.now()}
+        issue = serializer.save(claim=claim, created_by=request.user, **extra)
+        return Response(ClaimIssueSerializer(issue).data, status=201)
+
+    @action(detail=True, methods=["patch", "delete"], url_path=r"issues/(?P<issue_id>[^/.]+)")
+    def issue_detail(self, request: Request, pk: str | None = None, issue_id: str | None = None) -> Response:
+        from uuid import UUID
+
+        claim = self.get_object()
+        self._require(CLAIM_EDIT.code, str(claim.project_id))
+        try:
+            issue = claim.issues.filter(pk=UUID(str(issue_id))).first()
+        except ValueError:
+            issue = None
+        if issue is None:
+            raise NotFoundError("The requested issue does not exist on this claim.")
+        if request.method == "DELETE":
+            issue.delete()
+            return Response(status=204)
+
+        serializer = ClaimIssueSerializer(issue, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        extra = {}
+        if "human_outcome" in serializer.validated_data or "human_assessment" in serializer.validated_data:
+            # A determination on an issue is a human assessment, and is
+            # attributed as one (ADR 0006).
+            self._require(CLAIM_ASSESS.code, str(claim.project_id))
+            extra = {"assessed_by": request.user, "assessed_at": timezone.now()}
+        return Response(
+            ClaimIssueSerializer(serializer.save(updated_by=request.user, **extra)).data
+        )
+
     @action(detail=True, methods=["get"])
     def timeline(self, request: Request, pk: str | None = None) -> Response:
         """The claim's chronology, with conflicts and gaps surfaced."""

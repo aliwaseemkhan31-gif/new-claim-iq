@@ -182,6 +182,13 @@ CELERY_BEAT_SCHEDULE = {
         "kwargs": {"stale_minutes": env_int("STALLED_JOB_MINUTES", default=120)},
         "options": {"queue": "default"},
     },
+    # Notice deadlines computed from recorded claim dates. Deduplicated per
+    # recipient and deadline, so running it often never repeats a warning.
+    "scan-notice-deadlines": {
+        "task": "claimiq.notifications.tasks.scan_notice_deadlines",
+        "schedule": env_int("DEADLINE_SCAN_INTERVAL_SECONDS", default=3600),
+        "options": {"queue": "default"},
+    },
 }
 
 # ---------------------------------------------------------------------------

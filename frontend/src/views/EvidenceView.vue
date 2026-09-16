@@ -1,5 +1,5 @@
 <script setup>
-import FeaturePending from '@/components/common/FeaturePending.vue'
+import EvidencePanel from '@/components/domain/EvidencePanel.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 </script>
 
@@ -7,16 +7,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
   <div class="page">
     <PageHeader
       title="Evidence"
-      description="The evidence register across your projects."
+      description="Records linked to claims, with what each is said to establish and whether a person has reviewed it."
     />
-
-    <div class="surface">
-      <FeaturePending
-        icon="pi pi-paperclip"
-        title="Evidence register not available yet"
-        description="Every extract, record and exhibit linked to a claim, with provenance back to the source document and page. Requires the evidence API."
-        endpoint="/api/v1/evidence/"
-      />
-    </div>
+    <EvidencePanel show-claim />
   </div>
 </template>

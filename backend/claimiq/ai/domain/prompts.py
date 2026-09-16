@@ -102,13 +102,21 @@ colleague, not a chatbot."""
 
 GROUNDED_ANSWER = PromptTemplate(
     key="grounded_answer",
-    version="1.0.0",
+    version="1.1.0",
     system=_ANALYST_SYSTEM,
     required_variables=frozenset({"question", "sources"}),
     template="""Answer the question using only the sources below.
 
 SOURCES
 {sources}
+
+Each source states its type. A project document is part of this project's \
+own record, and its contract documents — including any Particular or \
+Supplementary Conditions — govern where they differ from the standard form on \
+the same point. Standard-form text states the unamended general conditions. \
+When sources of the two types say different things about the same point, say \
+so explicitly and state which governs; never present standard-form text as \
+what this project's contract says without noting that it is the standard form.
 
 QUESTION
 {question}

@@ -1,5 +1,5 @@
 <script setup>
-import FeaturePending from '@/components/common/FeaturePending.vue'
+import DocumentsPanel from '@/components/domain/DocumentsPanel.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 </script>
 
@@ -7,16 +7,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
   <div class="page">
     <PageHeader
       title="Documents"
-      description="Every document across all projects you can access, with its classification and processing state."
+      description="The document corpus across your projects. A document is searchable once it finishes processing; until then it is not part of any answer."
     />
-
-    <div class="surface">
-      <FeaturePending
-        icon="pi pi-file"
-        title="Document library not available yet"
-        description="The cross-project document library lists every ingested file with its type, extraction status and source project. Requires the documents API."
-        endpoint="/api/v1/documents/"
-      />
-    </div>
+    <DocumentsPanel show-project />
   </div>
 </template>

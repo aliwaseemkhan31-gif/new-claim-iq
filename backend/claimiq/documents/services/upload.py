@@ -209,11 +209,11 @@ def _enqueue(version: DocumentVersion) -> str | None:
     be far worse.
     """
     try:
+        from claimiq.ingestion.services.dispatch import dispatch_job
         from claimiq.ingestion.services.runner import enqueue_ingestion
-        from claimiq.ingestion.tasks import process_document
 
         job = enqueue_ingestion(version)
-        process_document.apply_async(args=[str(job.id)], queue="ingestion")
+        dispatch_job(str(job.id))
         return str(job.id)
     except Exception as exc:  # noqa: BLE001 - dispatch must not fail the upload
         logger.error(

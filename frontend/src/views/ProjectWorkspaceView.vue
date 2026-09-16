@@ -20,14 +20,28 @@ const project = computed(() => projects.activeProject)
 const loading = computed(() => projects.activeProjectLoading)
 const error = computed(() => projects.activeProjectError)
 
-/** Hide tabs the user cannot open. */
+/** Tabs are gated by the user's role *on this project*, not their org role. */
 const tabs = computed(() =>
-  PROJECT_TABS.filter((tab) => !tab.permission || auth.hasPermission(tab.permission))
+  PROJECT_TABS.filter(
+    (tab) => !tab.permission || auth.canInProject(props.projectId, tab.permission)
+  )
 )
+
+const parties = computed(() => {
+  const roles = ['employer', 'contractor', 'engineer']
+  const found = project.value?.parties ?? []
+  return roles.map((role) => ({
+    role,
+    name: found.find((party) => party.role === role)?.name ?? null,
+  }))
+})
 
 async function load() {
   try {
-    await projects.loadProject(props.projectId)
+    await Promise.all([
+      projects.loadProject(props.projectId),
+      auth.loadProjectPermissions(props.projectId),
+    ])
   } catch {
     // Surfaced through the store's error state below.
   }
@@ -46,41 +60,36 @@ onBeforeUnmount(() => projects.clearActiveProject())
       <LoadingSkeleton variant="text" :rows="2" />
     </div>
 
-    <ErrorState
-      v-else-if="error"
-      :error="error"
-      title="Could not open this project"
-      @retry="load"
-    />
+    <ErrorState v-else-if="error" :error="error" title="Could not open this project" @retry="load" />
 
     <template v-else-if="project">
       <header class="workspace__header">
         <div class="workspace__identity">
-          <div class="row gap-3">
+          <div class="row gap-3 wrap">
             <h1 class="workspace__title">{{ project.name }}</h1>
             <StatusBadge v-if="project.status" :status="project.status" />
+            <span v-if="project.code" class="text-mono text-xs text-muted">{{ project.code }}</span>
           </div>
 
           <dl class="workspace__facts">
             <div class="workspace__fact">
-              <dt>Contract</dt>
-              <dd>{{ project.contract_reference || EM_DASH }}</dd>
+              <dt>Conditions of contract</dt>
+              <dd>
+                <span v-if="project.edition_label">{{ project.edition_label }}</span>
+                <span v-else class="text-warning">Not declared</span>
+              </dd>
             </div>
-            <div class="workspace__fact">
-              <dt>Form</dt>
-              <dd>{{ project.contract_form || EM_DASH }}</dd>
-            </div>
-            <div class="workspace__fact">
-              <dt>Employer</dt>
-              <dd>{{ project.employer_name || EM_DASH }}</dd>
-            </div>
-            <div class="workspace__fact">
-              <dt>Contractor</dt>
-              <dd>{{ project.contractor_name || EM_DASH }}</dd>
+            <div v-for="party in parties" :key="party.role" class="workspace__fact">
+              <dt>{{ party.role }}</dt>
+              <dd>{{ party.name || EM_DASH }}</dd>
             </div>
             <div class="workspace__fact">
               <dt>Commenced</dt>
               <dd>{{ formatDate(project.commencement_date) }}</dd>
+            </div>
+            <div class="workspace__fact">
+              <dt>Completion</dt>
+              <dd>{{ formatDate(project.completion_date) }}</dd>
             </div>
           </dl>
         </div>
@@ -169,7 +178,7 @@ onBeforeUnmount(() => projects.clearActiveProject())
 
 .workspace__tab {
   position: relative;
-  padding: var(--space-3) var(--space-3);
+  padding: var(--space-3);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--color-text-secondary);

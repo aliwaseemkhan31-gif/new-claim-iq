@@ -27,6 +27,13 @@ api_v1 = [
     path("claims/", include("claimiq.claims.api.urls")),
     path("evidence/", include("claimiq.claims.api.evidence_urls")),
     path("ai/", include("claimiq.ai.api.urls")),
+    path("knowledge/", include("claimiq.knowledge.api.urls")),
+    path("search/", include("claimiq.search.api.urls")),
+    path("correspondence/", include("claimiq.correspondence.api.urls")),
+    path("notifications/", include("claimiq.notifications.api.urls")),
+    path("dashboard/", include("claimiq.dashboard.urls")),
+    path("reports/", include("claimiq.reports.api.urls")),
+    path("admin/", include("claimiq.accounts.api.admin_urls")),
 ]
 
 urlpatterns = [

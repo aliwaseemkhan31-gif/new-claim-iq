@@ -1,26 +1,16 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 
 import { useRouter } from 'vue-router'
 
 import AppBreadcrumbs from './AppBreadcrumbs.vue'
+import NotificationBell from './NotificationBell.vue'
 import ThemeToggle from './ThemeToggle.vue'
 import UserMenu from './UserMenu.vue'
 import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
 const ui = useUiStore()
-
-const notificationsOpen = ref(false)
-const notificationsRoot = ref(null)
-
-/**
- * Notifications are not wired to a backend feed yet. The bell shows the
- * honest state rather than a fabricated unread count — a fake "3" here would
- * be a lie the user acts on.
- */
-const notifications = ref([])
-const unreadCount = computed(() => notifications.value.filter((n) => !n.read).length)
 
 const shortcutKey = computed(() =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : 'Ctrl'
@@ -31,33 +21,14 @@ function openSearch() {
 }
 
 function onGlobalKeydown(event) {
-  const isSearchShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k'
-  if (isSearchShortcut) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault()
     openSearch()
   }
-  if (event.key === 'Escape') notificationsOpen.value = false
 }
 
-function onDocumentClick(event) {
-  if (
-    notificationsOpen.value &&
-    notificationsRoot.value &&
-    !notificationsRoot.value.contains(event.target)
-  ) {
-    notificationsOpen.value = false
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', onGlobalKeydown)
-  document.addEventListener('click', onDocumentClick)
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onGlobalKeydown)
-  document.removeEventListener('click', onDocumentClick)
-})
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 </script>
 
 <template>
@@ -81,29 +52,7 @@ onBeforeUnmount(() => {
       <kbd class="topbar__kbd">{{ shortcutKey }} K</kbd>
     </button>
 
-    <div ref="notificationsRoot" class="topbar__notifications">
-      <button
-        type="button"
-        class="topbar__icon-button"
-        :aria-expanded="notificationsOpen"
-        aria-label="Notifications"
-        @click="notificationsOpen = !notificationsOpen"
-      >
-        <i class="pi pi-bell" aria-hidden="true" />
-        <span v-if="unreadCount > 0" class="topbar__badge">{{ unreadCount }}</span>
-      </button>
-
-      <div v-if="notificationsOpen" class="topbar__panel">
-        <header class="topbar__panel-header">
-          <span class="text-semibold text-sm">Notifications</span>
-        </header>
-        <div class="topbar__panel-body">
-          <p class="topbar__panel-empty">
-            No notifications. The notification service is not connected in this build.
-          </p>
-        </div>
-      </div>
-    </div>
+    <NotificationBell />
 
     <ThemeToggle />
 

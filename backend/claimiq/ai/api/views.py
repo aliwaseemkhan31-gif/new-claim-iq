@@ -8,9 +8,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from claimiq.accounts.domain.permissions import AI_QUERY
-from claimiq.ai.services.answering import build_default_answering_service
+from claimiq.ai.domain.citations import resolve_ref
+from claimiq.ai.models import AIQuestion, AIQuestionStatus
+from claimiq.ai.services.answering import AnswerRecord, build_default_answering_service
+from claimiq.core.api.pagination import StandardPagination
 from claimiq.core.api.permissions import access_for
-from claimiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
+from claimiq.core.domain.errors import (
+    ClaimIQError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from claimiq.core.logging import get_logger
 from claimiq.knowledge.domain.editions import DEFAULT_REGISTRY
 from claimiq.projects.models import Project
@@ -58,55 +66,44 @@ class AskView(APIView):
             raise NotFoundError("The requested project does not exist.")
 
         scope = self._build_scope(project, context, data)
+        common = {
+            "project": project,
+            "asked_by": request.user,
+            "question": data["question"],
+            "include_knowledge_base": data["include_knowledge_base"],
+            "edition_code": scope.knowledge_base_edition or "",
+            "created_by": request.user,
+        }
 
         service = build_default_answering_service()
-        record = service.ask(data["question"], scope)
+        try:
+            record = service.ask(data["question"], scope)
+        except ClaimIQError as exc:
+            # A failed question is part of the record too; it is never turned
+            # into an answer.
+            AIQuestion.objects.create(
+                **common,
+                status=AIQuestionStatus.FAILED,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            raise
 
+        payload = answer_payload(record)
+        question = AIQuestion.objects.create(
+            **common,
+            status=AIQuestionStatus.ANSWERED,
+            response=payload,
+            model=record.model,
+            prompt_identifier=record.prompt_identifier,
+            latency_ms=record.latency_ms,
+        )
         return Response(
             {
-                "answer": {
-                    "summary": record.answer.summary,
-                    "confidence": record.answer.confidence.value,
-                    "insufficient_evidence": record.answer.insufficient_evidence,
-                    "findings": [
-                        {
-                            "statement": f.statement,
-                            "status": f.status.value,
-                            "citations": [
-                                {
-                                    "ref": c.ref,
-                                    "quotation": c.quotation,
-                                    "rendered": next(
-                                        (
-                                            s.render_citation()
-                                            for s in record.sources
-                                            if s.ref == c.ref
-                                        ),
-                                        None,
-                                    ),
-                                }
-                                for c in f.citations
-                            ],
-                        }
-                        for f in record.answer.findings
-                    ],
-                    "missing_information": record.answer.missing_information,
-                    "caveats": record.answer.caveats,
-                },
-                "sources": [
-                    {
-                        "ref": s.ref,
-                        "document_id": s.document_id,
-                        "document_title": s.document_title,
-                        "page_number": s.page_number,
-                        "clause_number": s.clause_number,
-                        "edition": s.edition,
-                        "is_knowledge_base": s.is_knowledge_base,
-                        "rendered": s.render_citation(),
-                        "excerpt": s.text[:400],
-                    }
-                    for s in record.sources
-                ],
+                "id": str(question.pk),
+                "question": question.question,
+                "created_at": question.created_at.isoformat(),
+                **payload,
                 "trace": record.as_observability_record()
                 if context.has("org.ai.observe")
                 else None,
@@ -149,6 +146,144 @@ class AskView(APIView):
             edition=project.contract_edition,
             accessible_project_ids=context.accessible_project_ids,
             document_type_codes=document_types,
+        )
+
+
+LAYER_PROJECT = "project_document"
+LAYER_STANDARD_FORM = "standard_form"
+
+
+def _edition_label(code: str | None) -> str | None:
+    if not code:
+        return None
+    return DEFAULT_REGISTRY.get_edition(code).label if DEFAULT_REGISTRY.has_edition(code) else code
+
+
+def _source_payload(source) -> dict:
+    return {
+        "ref": source.ref,
+        "layer": LAYER_STANDARD_FORM if source.is_knowledge_base else LAYER_PROJECT,
+        "document_id": None if source.is_knowledge_base else source.document_id,
+        "knowledge_base_id": source.document_id if source.is_knowledge_base else None,
+        "document_title": source.document_title,
+        "page_number": source.page_number,
+        "clause_number": source.clause_number,
+        "edition": source.edition,
+        "edition_label": _edition_label(source.edition),
+        "is_knowledge_base": source.is_knowledge_base,
+        "rendered": source.render_citation(),
+        "excerpt": source.text[:600],
+    }
+
+
+def answer_payload(record: AnswerRecord) -> dict:
+    """The answer as the UI renders it and as it is stored in history.
+
+    Every citation carries where its source lives — project document or
+    standard-form edition, document or knowledge base, page — so the UI can
+    open the passage. Citations are resolved through the same closed-world
+    lookup grounding used, so a decorated reference ("SOURCE ID: S1") still
+    reaches its source.
+    """
+    by_ref = {s.ref: s for s in record.sources}
+
+    def citation(c) -> dict:
+        ref = resolve_ref(c.ref, by_ref) or c.ref
+        source = by_ref.get(ref)
+        base = _source_payload(source) if source else {"ref": ref, "rendered": None}
+        base.pop("excerpt", None)
+        return {**base, "quotation": c.quotation}
+
+    return {
+        "answer": {
+            "summary": record.answer.summary,
+            "confidence": record.answer.confidence.value,
+            "insufficient_evidence": record.answer.insufficient_evidence,
+            "called_model": record.called_model,
+            "findings": [
+                {
+                    "statement": f.statement,
+                    "status": f.status.value,
+                    "citations": [citation(c) for c in f.citations],
+                }
+                for f in record.answer.findings
+            ],
+            "missing_information": record.answer.missing_information,
+            "caveats": record.answer.caveats,
+        },
+        "sources": [_source_payload(s) for s in record.sources],
+        "cited_refs": list(record.grounding.resolved_refs),
+        "model": record.model or None,
+    }
+
+
+def _question_project(request: Request, project_id):
+    context = access_for(request, project_id)
+    if context is None or context.organization_id is None:
+        raise NotFoundError("The requested project does not exist.")
+    context.require(AI_QUERY.code)
+    return context
+
+
+class QuestionListView(APIView):
+    """Questions asked about one project, newest first."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request) -> Response:
+        project_id = request.query_params.get("project")
+        if not project_id:
+            raise ValidationError("A 'project' is required.", details={"field": "project"})
+        context = _question_project(request, project_id)
+        queryset = AIQuestion.objects.filter(
+            project_id=project_id, project__organization_id=context.organization_id
+        ).select_related("asked_by")
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        return paginator.get_paginated_response(
+            [
+                {
+                    "id": str(q.pk),
+                    "question": q.question,
+                    "status": q.status,
+                    "asked_by": q.asked_by.email if q.asked_by_id else None,
+                    "created_at": q.created_at.isoformat(),
+                    "summary": (q.response.get("answer") or {}).get("summary"),
+                    "confidence": (q.response.get("answer") or {}).get("confidence"),
+                    "insufficient_evidence": (q.response.get("answer") or {}).get(
+                        "insufficient_evidence"
+                    ),
+                    "error_message": q.error_message or None,
+                }
+                for q in page
+            ]
+        )
+
+
+class QuestionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, pk) -> Response:
+        question = AIQuestion.objects.select_related("asked_by", "project").filter(pk=pk).first()
+        if question is None:
+            raise NotFoundError("The requested question does not exist.")
+        context = _question_project(request, question.project_id)
+        if question.project.organization_id != context.organization_id:
+            raise NotFoundError("The requested question does not exist.")
+        return Response(
+            {
+                "id": str(question.pk),
+                "project": str(question.project_id),
+                "question": question.question,
+                "status": question.status,
+                "asked_by": question.asked_by.email if question.asked_by_id else None,
+                "created_at": question.created_at.isoformat(),
+                "include_knowledge_base": question.include_knowledge_base,
+                "edition_code": question.edition_code or None,
+                "error_code": question.error_code or None,
+                "error_message": question.error_message or None,
+                **question.response,
+            }
         )
 
 

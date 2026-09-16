@@ -36,22 +36,29 @@ has not been run.
 | Grounded answering (Phase 4) — Ollama LLM + embeddings, closed-world citations, quotation checks | **Verified** | Live against `qwen2.5:3b-instruct` and `bge-m3` |
 | Claims intelligence (Phase 5) — claims, issues, evidence, notices, compliance, chronology | **Verified** | API and computations run against the real database |
 | Claim analysis engine (Phase 6) — seven strands, confidence caps, immutable findings, append-only review | **Verified** | See below |
-| Ingestion pipeline — extraction, OCR, structure, chunk, index | **Wired** | `EMBED` and `EXTRACT_TABLES` are not implemented and are reported as skipped, never as done |
-| Vue frontend — shell, auth, dashboard, API client | **Done** | 84 tests; claims and AI analysis screens still show "not available" rather than a mock-up |
+| Ingestion pipeline — extraction, OCR, tables, chunking, embeddings, indexing | **Verified** | Runs on real PDFs, scans, images and DOCX; OCR via RapidOCR (offline, CPU) |
+| Knowledge base (Phase 7) — upload a standard form, process, validate, publish | **Verified** | FIDIC Red Book 1987 ingested and published; 103 clauses; retrieval cites it |
+| Screens (Phase 7) — projects, documents, viewer, claims, evidence, correspondence, timeline, clauses, AI, knowledge base, reports, admin, dashboard, notifications | **Done** | No "not available yet" placeholders remain |
+| Reports, notifications, dashboard, administration APIs | **Verified** | Reports render to PDF and DOCX from a frozen snapshot |
 | Docker, compose, nginx, CI | **Authored (not run)** | Docker is not installed on the build host |
-| Reports, correspondence intelligence UI, notifications | Not started | Phases 7–8 |
+| Audit log, login lockout, API tokens, performance, backups | Not started | Phase 8 |
 
 ### What has genuinely been verified
 
 ```
-683 passed               # backend/tests/domain on Python 3.9  (ADR 0001 guard)
- 73 passed               # backend/tests/integration — Django, no database
-                         # manage.py check: no issues; all migrations applied
-                         # Phase 6 live: full claim analysis via the HTTP API
+735 passed               # backend/tests/domain on Python 3.9  (ADR 0001 guard)
+ 74 passed               # backend/tests/integration — Django, no database
+114 passed               # frontend — vitest, jsdom
+                         # manage.py check clean; lint clean; production build OK
+                         # Phase 6 live: claim analysis through the HTTP API
                          #   against PostgreSQL + pgvector and Ollama
-                         #   (qwen2.5:3b-instruct, bge-m3) — 7 strands, 80s on
-                         #   CPU, citations resolved, review recorded. Sources
-                         #   were 5 fixture passages written for the test.
+                         #   (qwen2.5:3b-instruct, bge-m3) — 7 strands in 80s
+                         # Phase 7 live: FIDIC Red Book 1987 uploaded, OCR'd
+                         #   where scanned, chunked, embedded, validated and
+                         #   published; search and an AI answer then cited
+                         #   Clause 53.1 p.31 for the 28-day notice period
+                         # Phase 7 live: claim assessment report generated to
+                         #   PDF (3 pages) and DOCX from a frozen snapshot
 ```
 
 ### What has *not* been verified, and why
