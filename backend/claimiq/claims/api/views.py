@@ -81,13 +81,16 @@ class ClaimSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source="project.name", read_only=True)
     claimant_name = serializers.CharField(source="claimant.name", read_only=True, default=None)
     respondent_name = serializers.CharField(source="respondent.name", read_only=True, default=None)
+    # The code is the API's contract; the label is what a reader should see.
+    # Without it every screen renders "eot".
+    claim_type_label = serializers.CharField(source="get_claim_type_display", read_only=True)
 
     class Meta:
         model = Claim
         fields = (
             "id", "project", "project_name", "reference", "title", "description",
             "claimant_name", "respondent_name",
-            "claim_type", "status", "claimant", "respondent",
+            "claim_type", "claim_type_label", "status", "claimant", "respondent",
             "event_date", "awareness_date", "notice_date", "submission_date",
             "determination_date", "amount_claimed", "amount_assessed",
             "currency", "time_claimed_days", "time_awarded_days",
@@ -487,12 +490,21 @@ class EvidenceViewSet(viewsets.ModelViewSet):
         context = access_for(self.request, str(instance.project_id))
         if context is None or not context.has(EVIDENCE_MANAGE.code):
             raise PermissionDeniedError("Not permitted.")
-        # Editing relevance is a review action, so it is attributed.
-        serializer.save(
-            updated_by=self.request.user,
-            reviewed_by=self.request.user,
-            reviewed_at=timezone.now(),
+        # Assessing the evidence is a review, and is attributed. Re-filing it
+        # under a different issue, or correcting its title, is clerical and must
+        # not mark it reviewed: being reviewed is what lets supporting evidence
+        # establish a required element rather than merely bear on it.
+        assessed = any(
+            field in serializer.validated_data
+            and serializer.validated_data[field] != getattr(instance, field)
+            for field in ("relevance", "weight")
         )
+        review = (
+            {"reviewed_by": self.request.user, "reviewed_at": timezone.now()}
+            if assessed
+            else {}
+        )
+        serializer.save(updated_by=self.request.user, **review)
 
     def perform_destroy(self, instance: Evidence) -> None:
         context = access_for(self.request, str(instance.project_id))

@@ -10,7 +10,6 @@ import AppButton from '@/components/common/AppButton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import CitationLink from '@/components/domain/CitationLink.vue'
 import ProjectPicker from '@/components/domain/ProjectPicker.vue'
-import SourceLayerBadge from '@/components/domain/SourceLayerBadge.vue'
 import { useProjectsStore } from '@/stores/projects'
 import { LAYER_STANDARD_FORM, sourceLayer } from '@/utils/viewer'
 
@@ -154,7 +153,6 @@ onMounted(() => {
         <article v-for="row in group.items" :key="row.chunk_id" class="surface search__result">
           <div class="row between gap-2 wrap">
             <div class="row gap-2 wrap">
-              <SourceLayerBadge :source="row" size="sm" />
               <CitationLink :citation="row" :show-quotation="false" />
             </div>
             <div class="row gap-1">

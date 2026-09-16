@@ -3,7 +3,6 @@ import { computed } from 'vue'
 
 import CitationLink from './CitationLink.vue'
 import EpistemicBadge from './EpistemicBadge.vue'
-import SourceLayerBadge from './SourceLayerBadge.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import { LAYER_STANDARD_FORM, sourceLayer } from '@/utils/viewer'
 
@@ -93,7 +92,6 @@ const groups = computed(() => [
           <ul class="answer__sources">
             <li v-for="source in group.items" :key="source.ref" class="answer__source">
               <div class="row gap-2 wrap">
-                <SourceLayerBadge :source="source" size="sm" />
                 <CitationLink :citation="source" :show-quotation="false" />
                 <StatusBadge
                   v-if="!cited.has(source.ref)"

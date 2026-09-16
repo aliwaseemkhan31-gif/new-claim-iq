@@ -273,7 +273,7 @@ onMounted(load)
                 </p>
               </td>
               <td v-if="showProject" class="text-xs">{{ claim.project_name || EM_DASH }}</td>
-              <td>{{ claim.claim_type }}</td>
+              <td>{{ claim.claim_type_label || claim.claim_type }}</td>
               <td><StatusBadge :status="claim.status" size="sm" /></td>
               <td class="cell-numeric">
                 {{

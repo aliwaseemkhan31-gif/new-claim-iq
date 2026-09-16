@@ -198,7 +198,7 @@ onMounted(load)
 
         <dl class="claim__facts">
           <div><dt>Reference</dt><dd>{{ claim.reference || EM_DASH }}</dd></div>
-          <div><dt>Type</dt><dd>{{ claim.claim_type }}</dd></div>
+          <div><dt>Type</dt><dd>{{ claim.claim_type_label || claim.claim_type }}</dd></div>
           <div>
             <dt>Amount claimed</dt>
             <dd>
