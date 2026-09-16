@@ -306,6 +306,15 @@ ALLOWED_UPLOAD_MIME_TYPES = env_list(
 AI_SETTINGS = {
     "OLLAMA_BASE_URL": env_str("OLLAMA_BASE_URL", default="http://ollama:11434"),
     "OLLAMA_TIMEOUT_SECONDS": env_int("OLLAMA_TIMEOUT_SECONDS", default=300),
+    # Every generation is bounded. Unbounded, a small model constrained to a
+    # JSON schema can repeat itself until the context fills; Ollama keeps
+    # generating after the client has timed out, and every later request —
+    # including a one-word health probe — queues behind it.
+    "LLM_MAX_OUTPUT_TOKENS": env_int("LLM_MAX_OUTPUT_TOKENS", default=1536),
+    # Ollama's default context is 4096 tokens and it drops the start of a
+    # longer prompt silently — which is where the grounding instructions are.
+    # Eight passages of OCR'd contract text plus the instructions exceed it.
+    "LLM_CONTEXT_TOKENS": env_int("LLM_CONTEXT_TOKENS", default=8192),
     # No model name is hardcoded. The active model is resolved from the
     # ModelConfiguration table at call time, so an administrator can change it
     # without a deploy. The values below seed an empty installation only.

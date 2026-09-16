@@ -312,3 +312,19 @@ def test_parsed_findings_carry_no_source_scaffolding() -> None:
         }
     )
     assert answer.findings[0].statement == "The cited source establishes the notice period."
+
+
+def test_humanise_refs_replaces_bare_identifiers_that_were_assembled() -> None:
+    """Observed on the N-55 contract: "S1 governs the Conditions of Particular Application"."""
+    from claimiq.ai.domain.citations import humanise_refs
+
+    assert humanise_refs(
+        "S1 governs the Particular Conditions, and S2 and S3 govern the SCC.",
+        {"S1", "S2", "S3"},
+    ) == "The cited source governs the Particular Conditions, and the cited sources govern the SCC."
+
+
+def test_humanise_refs_keeps_a_bare_token_that_is_not_an_assembled_source() -> None:
+    from claimiq.ai.domain.citations import humanise_refs
+
+    assert humanise_refs("Section S9 was handed over.", {"S1", "S2"}) == "Section S9 was handed over."

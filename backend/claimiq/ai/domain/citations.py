@@ -220,7 +220,16 @@ _SCAFFOLDING_RE = re.compile(
 )
 
 
-def humanise_refs(text: str) -> str:
+#: A bare source identifier, replaced only when it is a known one.
+_BARE_REF_RE = re.compile(r"\b(S\d{1,3})\b")
+
+#: "the cited source and the cited source" after replacement reads as one plural.
+_REPEATED_RE = re.compile(
+    r"the cited sources?(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)the cited sources?)+",
+    re.IGNORECASE,
+)
+
+def humanise_refs(text: str, known_refs: Container[str] = ()) -> str:
     """Remove the prompt's internal source labels from prose meant for a reader.
 
     Sources are presented to the model as ``SOURCE ID: S1`` so that citations
@@ -230,9 +239,11 @@ def humanise_refs(text: str) -> str:
     The citation list under each finding already names the source properly, so
     the label is replaced with a plain reference to it.
 
-    Only the decorated forms are touched. A bare ``S1`` is left alone: it may be
-    a section, a chainage or a party's shorthand in the contract itself, and
-    rewriting it would corrupt a quotation.
+    Decorated forms are always replaced. A bare ``S1`` is replaced only when it
+    is one of ``known_refs`` — the identifiers actually assembled for this
+    answer — because otherwise it may be a section, a chainage or a party's
+    shorthand in the contract itself. Quotations are never passed through
+    this: it is for the model's own prose.
     """
     if not text:
         return text
@@ -242,6 +253,12 @@ def humanise_refs(text: str) -> str:
         return "the cited sources" if plural else "the cited source"
 
     cleaned = _SCAFFOLDING_RE.sub(_replace, text)
+    if known_refs:
+        cleaned = _BARE_REF_RE.sub(
+            lambda m: "the cited source" if m.group(1) in known_refs else m.group(0),
+            cleaned,
+        )
+    cleaned = _REPEATED_RE.sub("the cited sources", cleaned)
     if cleaned and cleaned[:1].islower() and text[:1].isupper():
         cleaned = cleaned[0].upper() + cleaned[1:]
     return cleaned

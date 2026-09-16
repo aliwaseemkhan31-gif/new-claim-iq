@@ -185,3 +185,38 @@ run-together words to 0 on a sampled page) for about 7% more time.
 
 **`?format=pdf` collided with DRF content negotiation**, so report downloads
 404'd. The format is now a path segment.
+
+**Generation was unbounded.** No request set an output limit. Asking questions
+over the 294-page N-55 contract, a schema-constrained generation from the 3B
+model ran on after the client's 300 s timeout — Ollama does not stop on
+disconnect — and a one-word probe then waited over ten minutes behind it.
+Output is now capped (`LLM_MAX_OUTPUT_TOKENS`, default 1536) and the context
+set explicitly (`LLM_CONTEXT_TOKENS`, default 8192): Ollama's 4096 default
+silently drops the start of a longer prompt, which is where the grounding
+instructions sit.
+
+**Walking the UI on the real project** found: correspondence recorded from a
+claim disappeared from that claim's list; three required elements (the
+triggering event, cost incurred, the instruction) had no issue category and so
+could never be established; re-filing evidence under an issue marked it
+reviewed, which is what lets it establish an element; the prompt's source
+labels ("SOURCE ID: S1", "S2 and S3 govern…") leaked into findings and
+summaries; the dashboard said "computed for 0 claims" without saying the
+project had no declared edition; OCR progress sat on one percentage for an
+hour. All fixed, with tests.
+
+### Open: answer quality on a real contract volume
+
+The N-55 file is a whole tender volume — Instructions to Bidders, Particular
+Conditions (Part II), Supplementary Conditions (Part III), specifications, BOQ.
+Its General Conditions are FIDIC Red Book 1987, 4th ed., reprinted 1992
+(p.14, p.70, p.109). Clause detection labels numbered items in every part as
+clauses (193 distinct numbers; "1" and "2" from the bidding documents are the
+most common), and nothing records which *part* a passage belongs to. With
+qwen2.5:3b-instruct this produced a grounded-but-wrong finding: asked whether
+the contract changes the standard form on the Engineer's authority, it cited a
+bidding-document page as "Clause 36.1" and said it did not — Part II Sub-Clause
+2.1 (p.72) does. Grounding verifies that citations exist and quotations match;
+it cannot verify that a conclusion follows. Next step: segment contract volumes
+into parts, so a clause number is qualified by its part and Particular
+Conditions can be retrieved as amendments to a named General Condition.

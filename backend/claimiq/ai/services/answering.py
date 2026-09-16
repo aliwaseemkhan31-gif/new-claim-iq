@@ -266,7 +266,7 @@ class AnsweringService:
                     },
                 )
                 return AnswerRecord(
-                    answer=answer,
+                    answer=_humanised(answer, {s.ref for s in sources}),
                     sources=sources,
                     grounding=grounding,
                     model=self.llm_model,
@@ -370,11 +370,35 @@ def build_default_answering_service() -> AnsweringService:
         from claimiq.ai.providers.ollama import OllamaLLMProvider
 
         provider = OllamaLLMProvider(
-            ai_settings["OLLAMA_BASE_URL"], ai_settings["OLLAMA_TIMEOUT_SECONDS"]
+            ai_settings["OLLAMA_BASE_URL"],
+            ai_settings["OLLAMA_TIMEOUT_SECONDS"],
+            max_output_tokens=ai_settings.get("LLM_MAX_OUTPUT_TOKENS"),
+            context_tokens=ai_settings.get("LLM_CONTEXT_TOKENS"),
         )
 
     return AnsweringService(
         retrieval_service=build_default_service(),
         llm_provider=provider,
         llm_model=llm_model,
+    )
+
+
+def _humanised(answer, known_refs):
+    """The answer with the prompt's source identifiers removed from its prose.
+
+    Observed on the N-55 contract: "S1 governs the Conditions of Particular
+    Application, and S2 and S3 govern the Supplementary Conditions". Citations
+    are untouched — they carry the identifiers the reader's links resolve.
+    """
+    import dataclasses
+
+    from claimiq.ai.domain.citations import humanise_refs
+
+    return dataclasses.replace(
+        answer,
+        summary=humanise_refs(answer.summary, known_refs),
+        findings=[
+            dataclasses.replace(f, statement=humanise_refs(f.statement, known_refs))
+            for f in answer.findings
+        ],
     )

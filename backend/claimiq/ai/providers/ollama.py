@@ -148,8 +148,21 @@ class OllamaLLMProvider(LLMProvider):
 
     provider_key = "ollama"
 
-    def __init__(self, base_url: str, timeout_seconds: int = 300) -> None:
+    #: Used when a request names no limit. Generation is never unbounded: a
+    #: client timeout does not stop Ollama, so a runaway generation blocks the
+    #: runtime for every later caller.
+    DEFAULT_MAX_OUTPUT_TOKENS = 1536
+
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: int = 300,
+        max_output_tokens: int | None = None,
+        context_tokens: int | None = None,
+    ) -> None:
         self.client = OllamaClient(base_url, timeout_seconds)
+        self.max_output_tokens = max_output_tokens or self.DEFAULT_MAX_OUTPUT_TOKENS
+        self.context_tokens = context_tokens
 
     def is_available(self) -> bool:
         return self.client.is_reachable()
@@ -176,8 +189,9 @@ class OllamaLLMProvider(LLMProvider):
             # not a feature here.
             "temperature": request.temperature if request.temperature is not None else 0.0,
         }
-        if request.max_tokens is not None:
-            options["num_predict"] = request.max_tokens
+        options["num_predict"] = request.max_tokens or self.max_output_tokens
+        if self.context_tokens:
+            options["num_ctx"] = self.context_tokens
         if request.stop_sequences:
             options["stop"] = list(request.stop_sequences)
         if request.seed is not None:
