@@ -402,3 +402,51 @@ def test_summary_states_grounded_status() -> None:
     sources = build_source_map([kb_source("S1")])
     assert "grounded" in validate_findings([fact("x", Citation("S1"))], sources).summary()
     assert "NOT grounded" in validate_findings([fact("x", Citation("S9"))], sources).summary()
+
+
+# ---------------------------------------------------------------------------
+# Quotations against OCR-damaged sources
+#
+# The scanned FIDIC 1987 reads "Notwithstandinga ny other provision" and "the
+# Contractors hall send" — OCR moves spaces without losing characters. Matching
+# on exact spacing rejected a model that quoted the provision as a person reads
+# it, while accepting one that reproduced the damage; it made the better model
+# look ungrounded on the N-55 corpus.
+# ---------------------------------------------------------------------------
+
+_OCR_SOURCE = (
+    "53.1 Notwithstandinga ny other provision of the Contract, if the "
+    "Contractori ntends to claim any additional payment pursuant to any Clause "
+    "of these Conditions or otherwise, he shall give notice of his intention "
+    "to the Engineer, with a copy to the Employer, within 28 days after the "
+    "event giving rise to the claim has first arisen."
+)
+
+
+def test_a_quotation_that_repairs_ocr_spacing_is_verified() -> None:
+    from claimiq.ai.domain.citations import verify_quotation
+
+    assert verify_quotation(
+        "Notwithstanding any other provision of the Contract, if the Contractor "
+        "intends to claim any additional payment",
+        _OCR_SOURCE,
+    )
+
+
+def test_a_quotation_reproducing_the_damage_is_still_verified() -> None:
+    from claimiq.ai.domain.citations import verify_quotation
+
+    assert verify_quotation("Notwithstandinga ny other provision of the Contract", _OCR_SOURCE)
+
+
+def test_leniency_about_spacing_does_not_admit_changed_words() -> None:
+    """The guarantee is unchanged: the characters must be in the source."""
+    from claimiq.ai.domain.citations import verify_quotation
+
+    assert not verify_quotation("he may give notice of his intention to the Engineer", _OCR_SOURCE)
+    assert not verify_quotation(
+        "within 42 days after the event giving rise to the claim", _OCR_SOURCE
+    )
+    assert not verify_quotation(
+        "the Contractor shall be entitled to an extension of time", _OCR_SOURCE
+    )

@@ -196,6 +196,11 @@ def normalise_for_comparison(text: str) -> str:
     return _WS_RE.sub(" ", folded).strip().lower()
 
 
+def _without_spaces(text: str) -> str:
+    """Normalised text with every space removed, for OCR-damaged sources."""
+    return _WS_RE.sub("", normalise_for_comparison(text))
+
+
 def verify_quotation(quotation: str, source_text: str) -> bool:
     """True if ``quotation`` occurs in ``source_text`` after normalisation.
 
@@ -206,7 +211,15 @@ def verify_quotation(quotation: str, source_text: str) -> bool:
     cleaned = quotation.strip().strip("\"'“”")
     if len(cleaned) < MIN_QUOTATION_CHARS:
         return True
-    return normalise_for_comparison(cleaned) in normalise_for_comparison(source_text)
+    if normalise_for_comparison(cleaned) in normalise_for_comparison(source_text):
+        return True
+    # Second chance, ignoring where the spaces fall. OCR moves them: the
+    # scanned FIDIC 1987 reads "Notwithstandinga ny other provision" and "the
+    # Contractors hall send". A model that quotes the provision as a person
+    # would read it is correct, and matching on exact spacing rejected it while
+    # accepting one that parroted the damage. The character sequence must still
+    # be present, so a fabricated quotation cannot pass.
+    return _without_spaces(cleaned) in _without_spaces(source_text)
 
 
 #: A source identifier: a short letter prefix and a number, e.g. ``S1``.
