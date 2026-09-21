@@ -88,7 +88,7 @@ something, say so.
 identifier is the value after "SOURCE ID:" and nothing else — cite exactly \
 "S1", not the reference line beside it. Never cite an identifier that is not \
 in the source list.
-3. When you quote, quote exactly. Do not paraphrase inside quotation marks.
+3. When you quote, quote exactly: one unbroken run of text, copied from a single source, with nothing left out of the middle. Do not paraphrase inside quotation marks, and do not stitch separate parts together — omitting the limbs between "in the event of" and a later sub-paragraph changes what the provision says. Quote a shorter piece instead, or cite the source without quoting it.
 4. Distinguish what the sources establish (fact) from what you reason from \
 them (inference) from your professional view (opinion). Where the sources are \
 insufficient, say that instead of guessing.
@@ -102,7 +102,7 @@ colleague, not a chatbot."""
 
 GROUNDED_ANSWER = PromptTemplate(
     key="grounded_answer",
-    version="1.1.0",
+    version="1.2.0",
     system=_ANALYST_SYSTEM,
     required_variables=frozenset({"question", "sources"}),
     template="""Answer the question using only the sources below.

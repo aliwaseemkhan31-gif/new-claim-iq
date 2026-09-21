@@ -220,3 +220,41 @@ bidding-document page as "Clause 36.1" and said it did not — Part II Sub-Claus
 it cannot verify that a conclusion follows. Next step: segment contract volumes
 into parts, so a clause number is qualified by its part and Particular
 Conditions can be retrieved as amendments to a named General Condition.
+
+### Measured: qwen2.5:3b-instruct against qwen2.5:7b-instruct
+
+Same corpus, same retrieval, same prompts, temperature 0, fixed seed, on an
+RTX 3050 (4 GB) with an i5-11400H. The 7B does not fit in 4 GB and runs mostly
+on CPU.
+
+| | 3B | 7B |
+| --- | --- | --- |
+| Question: notice for additional payment | 5 s, correct | 105 s, correct and fuller (53.1 and 53.3) |
+| Question: limits on the Engineer's authority | 39 s, wrong — "does not change the standard form" | 170 s, found the Particular Conditions limit of Rs. 500,000 on variation orders and distinguished the two layers |
+| Claim analysis | 84 s, 6 of 7 strands completed | 2059 s, 3 of 7 completed |
+
+The 7B is materially better where it succeeds and roughly 10–25x slower. What
+stops it is ours, not the model:
+
+**Quotation verification punished the better model.** It matched on exact
+spacing, and the scanned FIDIC reads "Notwithstandinga ny other provision". A
+model quoting the provision as a person reads it was rejected as fabricating
+while one parroting the OCR damage passed. Fixed: a failed match is retried
+with spacing removed, so the characters must still be present.
+
+**Remaining failures are elisions, and they are partly our fault.** The 7B
+quotes "44.1 In the event of: (d) any delay… or (e) other special
+circumstances…", dropping limbs (a) to (c). Eliding limbs of a contract
+provision can invert its meaning, so the check rejects it — but the stored
+clause text is itself interleaved with marginal-note fragments ("for",
+"Completion") that section assembly spliced into the middle of the list, so a
+contiguous quotation of that passage reads as nonsense. Telling the model not
+to elide (GROUNDED_ANSWER 1.2.0) did not change its behaviour.
+
+Two candidate fixes, in order: stop interleaving marginal notes into clause
+bodies at assembly; and, where a quotation's fragments occur in the source in
+order, display the source's own contiguous span rather than the model's
+reconstruction, so what the reader sees is always literal source text.
+
+Until then the 3B stays the default. A grounding failure now records the
+quotation it objected to, which is how the above was diagnosed.

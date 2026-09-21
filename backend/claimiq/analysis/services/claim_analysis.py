@@ -418,6 +418,10 @@ def run_model_strand(
             prompt_identifier=plan.prompt_key or "",
             error_code=exc.code,
             error_message=exc.message,
+            # Kept so a failure can be diagnosed afterwards. "The response
+            # quoted text that does not appear in the cited source" is not
+            # actionable without the quotation it objected to.
+            observability={"failure": dict(exc.details or {})},
         )
 
     answer = record.answer
