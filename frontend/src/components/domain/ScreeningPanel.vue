@@ -61,6 +61,21 @@ const AREA_ICONS = {
   relief: 'pi pi-calculator',
 }
 
+/**
+ * Tile labels, shorter than the area's full name.
+ *
+ * "Supporting evidence and contemporary records" wraps to three lines in a
+ * tile and makes the row of five ragged. The full name still heads the
+ * expanded section, where there is room for it.
+ */
+const AREA_SHORT = {
+  entitlement: 'Entitlement',
+  notice: 'Notice',
+  event: 'Event',
+  records: 'Records',
+  relief: 'Relief',
+}
+
 function isOutstanding(check) {
   return ['incomplete', 'indeterminate', 'barred'].includes(check.status)
 }
@@ -174,9 +189,12 @@ function visibleChecks(area) {
             :aria-expanded="open.includes(area.code)"
             @click="toggle(area.code)"
           >
-            <i :class="AREA_ICONS[area.code]" aria-hidden="true" />
-            <span class="screen__area-label">{{ area.label }}</span>
+            <span class="row gap-2">
+              <i :class="AREA_ICONS[area.code]" aria-hidden="true" />
+              <span class="screen__area-label">{{ AREA_SHORT[area.code] ?? area.label }}</span>
+            </span>
             <StatusBadge :tone="area.state.tone" :label="area.state.label" size="sm" />
+            <span class="sr-only">{{ area.label }}</span>
           </button>
         </li>
       </ul>
@@ -258,7 +276,7 @@ function visibleChecks(area) {
 
 .screen__areas {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--space-2);
   list-style: none;
   margin: 0;
@@ -267,7 +285,8 @@ function visibleChecks(area) {
 
 .screen__area {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-2);
   width: 100%;
   height: 100%;
@@ -305,9 +324,9 @@ function visibleChecks(area) {
 }
 
 .screen__area-label {
-  flex: 1;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+  white-space: nowrap;
 }
 
 .screen__checks {
