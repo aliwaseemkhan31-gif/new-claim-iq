@@ -7,12 +7,13 @@ import * as claimsApi from '@/api/claims'
 import * as projectsApi from '@/api/projects'
 import AppButton from '@/components/common/AppButton.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
-import ScreeningPanel from '@/components/domain/ScreeningPanel.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import AnalysisPanel from '@/components/domain/AnalysisPanel.vue'
+import ScreeningPanel from '@/components/domain/ScreeningPanel.vue'
 import CorrespondencePanel from '@/components/domain/CorrespondencePanel.vue'
 import EvidencePanel from '@/components/domain/EvidencePanel.vue'
 import ReportsPanel from '@/components/domain/ReportsPanel.vue'
@@ -37,6 +38,9 @@ const auth = useAuthStore()
 const ui = useUiStore()
 
 const TABS = [
+  // Screening leads because it is the first question asked of a claim, and it
+  // is answerable before any of the others have anything to show.
+  ['screening', 'Screening'],
   ['overview', 'Overview'],
   ['notices', 'Notice'],
   ['evidence', 'Evidence'],
@@ -44,6 +48,13 @@ const TABS = [
   ['analysis', 'AI analysis'],
   ['reports', 'Reports'],
 ]
+
+const SCREENING_TONE = {
+  barred: 'danger',
+  not_ready: 'warning',
+  ready_with_queries: 'info',
+  ready: 'success',
+}
 
 const OUTCOMES = [
   ['substantiated', 'Substantiated — accept'],
@@ -70,7 +81,21 @@ const ISSUE_CATEGORIES = [
   ['other', 'Other'],
 ]
 
+//: Mirrors ClaimType on the model, as ClaimsPanel does for the create form.
+const CLAIM_TYPES = [
+  ['eot', 'Extension of Time'],
+  ['variation', 'Variation'],
+  ['cost', 'Additional Cost'],
+  ['delay', 'Delay'],
+  ['disruption', 'Disruption'],
+  ['acceleration', 'Acceleration'],
+  ['payment', 'Payment'],
+  ['compensation_event', 'Compensation Event'],
+  ['other', 'Other'],
+]
+
 const claim = ref(null)
+const parties = ref([])
 const project = ref(null)
 const gaps = ref(null)
 const notice = ref(null)
@@ -78,10 +103,62 @@ const screening = ref(null)
 const loading = ref(true)
 const error = ref(null)
 
-const tab = computed(() => (TABS.some(([id]) => id === route.query.tab) ? route.query.tab : 'overview'))
+/**
+ * The tab to show when none is named.
+ *
+ * A claim that cannot yet be assessed opens on screening, which says why. One
+ * that is assessable opens on the overview, because the screening has nothing
+ * to stop anyone with.
+ */
+const defaultTab = computed(() =>
+  ['barred', 'not_ready'].includes(screening.value?.outcome) ? 'screening' : 'overview',
+)
+const tab = computed(() =>
+  TABS.some(([id]) => id === route.query.tab) ? route.query.tab : defaultTab.value,
+)
 const projectId = computed(() => claim.value?.project ?? null)
 const canAssess = computed(() => auth.canInProject(projectId.value, 'claim.assess'))
 const canEdit = computed(() => auth.canInProject(projectId.value, 'claim.edit'))
+
+/**
+ * Where an outstanding check can be put right.
+ *
+ * A checklist whose every item ends in "go and find the screen that does this"
+ * is a worse experience than no checklist, so each remedy that corresponds to
+ * something this application can actually do links to it. Checks with no
+ * destination — the informational ones, and anything needing work off-system —
+ * are deliberately absent rather than linked somewhere unhelpful.
+ */
+const SCREENING_ACTIONS = {
+  CB1: { kind: 'route', label: 'Open the project', icon: 'pi pi-arrow-up-right' },
+  CB2: { kind: 'edit', label: 'Record the clauses', icon: 'pi pi-pencil' },
+  CB4: { kind: 'edit', label: 'Record the parties', icon: 'pi pi-pencil' },
+  NC1: { kind: 'edit', label: 'Record the awareness date', icon: 'pi pi-pencil' },
+  NC3: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
+  NC6: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
+  NC7: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
+  NC8: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
+  EV1: { kind: 'edit', label: 'Record the event date', icon: 'pi pi-pencil' },
+  EV2: { kind: 'edit', label: 'Record the account', icon: 'pi pi-pencil' },
+  EV3: { kind: 'edit', label: 'Correct the dates', icon: 'pi pi-pencil' },
+  EV4: { kind: 'edit', label: 'Correct the dates', icon: 'pi pi-pencil' },
+  EV5: { kind: 'tab', tab: 'notices', label: 'Record the instruction', icon: 'pi pi-arrow-right' },
+  RC1: { kind: 'tab', tab: 'evidence', label: 'Go to Evidence', icon: 'pi pi-arrow-right' },
+  QR1: { kind: 'edit', label: 'Record the relief', icon: 'pi pi-pencil' },
+  QR2: { kind: 'edit', label: 'Record the currency', icon: 'pi pi-pencil' },
+  QR3: { kind: 'edit', label: 'Correct the figure', icon: 'pi pi-pencil' },
+  QR4: { kind: 'edit', label: 'Check the claim type', icon: 'pi pi-pencil' },
+}
+
+const screeningActions = computed(() => (canEdit.value ? SCREENING_ACTIONS : {}))
+
+function actOnScreening(action) {
+  if (action.kind === 'edit') openEdit()
+  else if (action.kind === 'tab') setTab(action.tab)
+  else if (action.kind === 'route' && claim.value) {
+    router.push({ name: 'project-overview', params: { projectId: claim.value.project } })
+  }
+}
 
 function setTab(next) {
   router.replace({ query: { ...route.query, tab: next } })
@@ -108,6 +185,11 @@ async function load() {
     claim.value = await claimsApi.fetchClaim(props.claimId)
     await auth.loadProjectPermissions(claim.value.project)
     project.value = await projectsApi.fetchProject(claim.value.project)
+    try {
+      parties.value = await projectsApi.listParties(claim.value.project)
+    } catch {
+      parties.value = []
+    }
     await loadComputed()
   } catch (err) {
     error.value = err
@@ -117,6 +199,83 @@ async function load() {
 }
 
 watch(() => props.claimId, load)
+
+// -- Editing ----------------------------------------------------------------
+//
+// Added with screening: almost every outstanding check is "record this on the
+// claim", and until now a claim could be created but never corrected. A
+// checklist pointing at a field nobody can edit is just a complaint.
+
+const editOpen = ref(false)
+const editSaving = ref(false)
+const editErrors = ref({})
+const editForm = ref({})
+
+function openEdit() {
+  const c = claim.value
+  editForm.value = {
+    reference: c.reference || '',
+    title: c.title || '',
+    claim_type: c.claim_type || 'other',
+    claimant: c.claimant || '',
+    respondent: c.respondent || '',
+    event_date: c.event_date || '',
+    awareness_date: c.awareness_date || '',
+    notice_date: c.notice_date || '',
+    submission_date: c.submission_date || '',
+    amount_claimed: c.amount_claimed ?? '',
+    currency: c.currency || '',
+    time_claimed_days: c.time_claimed_days ?? '',
+    contractual_basis: (c.contractual_basis || []).join(', '),
+    description: c.description || '',
+  }
+  editErrors.value = {}
+  editOpen.value = true
+}
+
+async function submitEdit() {
+  if (editSaving.value || !editForm.value.title.trim()) return
+  editSaving.value = true
+  editErrors.value = {}
+  try {
+    const form = editForm.value
+    const payload = {
+      reference: form.reference.trim(),
+      title: form.title.trim(),
+      claim_type: form.claim_type,
+      description: form.description.trim(),
+      currency: form.currency.trim(),
+      contractual_basis: form.contractual_basis
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+    }
+    // An empty field means "not recorded", and must clear the value rather
+    // than be dropped from the payload and silently left as it was.
+    for (const field of [
+      'claimant',
+      'respondent',
+      'event_date',
+      'awareness_date',
+      'notice_date',
+      'submission_date',
+      'amount_claimed',
+      'time_claimed_days',
+    ]) {
+      payload[field] = form[field] === '' ? null : form[field]
+    }
+
+    claim.value = await claimsApi.updateClaim(props.claimId, payload)
+    ui.notifySuccess('Claim updated', 'Screening has been recomputed.')
+    editOpen.value = false
+    await loadComputed()
+  } catch (err) {
+    editErrors.value = err?.fieldErrors ?? {}
+    if (!Object.keys(editErrors.value).length) ui.notifyError(err, 'Could not update the claim')
+  } finally {
+    editSaving.value = false
+  }
+}
 
 // -- Determination ----------------------------------------------------------
 
@@ -198,6 +357,19 @@ onMounted(load)
           <h1 class="claim__title">{{ claim.title }}</h1>
           <StatusBadge :status="claim.status" />
           <StatusBadge :status="claim.human_outcome" size="sm" />
+          <!-- Screening state follows the claim onto every tab: a possible
+               time bar should not be something you have to go back to find. -->
+          <button
+            v-if="screening"
+            type="button"
+            class="claim__screening"
+            :class="`is-${SCREENING_TONE[screening.outcome]}`"
+            :title="screening.summary"
+            @click="setTab('screening')"
+          >
+            <i class="pi pi-shield" aria-hidden="true" />
+            {{ screening.outcome_label }}
+          </button>
         </div>
 
         <dl class="claim__facts">
@@ -232,6 +404,14 @@ onMounted(load)
 
         <div class="row gap-2">
           <AppButton
+            v-if="canEdit"
+            size="sm"
+            variant="ghost"
+            icon="pi pi-pencil"
+            label="Edit claim"
+            @click="openEdit"
+          />
+          <AppButton
             v-if="canAssess"
             size="sm"
             variant="primary"
@@ -255,10 +435,24 @@ onMounted(load)
         </button>
       </nav>
 
+      <!-- Screening -->
+      <template v-if="tab === 'screening'">
+        <ScreeningPanel
+          v-if="screening"
+          :screening="screening"
+          :actions="screeningActions"
+          @act="actOnScreening"
+        />
+        <EmptyState
+          v-else
+          icon="pi pi-shield"
+          title="Screening is unavailable"
+          description="The checks could not be run for this claim. The rest of the claim is unaffected."
+        />
+      </template>
+
       <!-- Overview -->
       <template v-if="tab === 'overview'">
-        <ScreeningPanel v-if="screening" :screening="screening" />
-
         <section v-if="claim.description" class="surface claim__section">
           <p class="section-title">The claimant’s account</p>
           <p class="claim__description">{{ claim.description }}</p>
@@ -303,6 +497,11 @@ onMounted(load)
 
         <section v-if="gaps" class="surface claim__section">
           <p class="section-title">What the claim must establish</p>
+          <p class="text-xs text-muted">
+            Computed from the evidence linked to this claim, which is a different question
+            from screening: this asks what the record establishes, not whether the claim is
+            in a fit state to work on.
+          </p>
           <p class="text-sm">{{ gaps.summary }}</p>
           <div class="table-scroll">
             <table class="data-table">
@@ -449,6 +648,112 @@ onMounted(load)
       </template>
     </AppDialog>
 
+    <AppDialog
+      v-model="editOpen"
+      title="Edit claim"
+      description="What the record says about the claim. An empty field is recorded as not stated, never guessed."
+      size="lg"
+      :busy="editSaving"
+    >
+      <div class="stack gap-4">
+        <FormField label="Title" for-id="edit-title" required :error="editErrors.title">
+          <input id="edit-title" v-model="editForm.title" class="field-input" type="text" />
+        </FormField>
+
+        <div class="row gap-3 wrap">
+          <FormField label="Reference" for-id="edit-reference" class="grow" :error="editErrors.reference">
+            <input id="edit-reference" v-model="editForm.reference" class="field-input" type="text" />
+          </FormField>
+          <FormField label="Type" for-id="edit-type" class="grow" :error="editErrors.claim_type">
+            <select id="edit-type" v-model="editForm.claim_type" class="field-input">
+              <option v-for="[value, label] in CLAIM_TYPES" :key="value" :value="value">
+                {{ label }}
+              </option>
+            </select>
+          </FormField>
+        </div>
+
+        <div class="row gap-3 wrap">
+          <FormField label="Claimant" for-id="edit-claimant" class="grow" :error="editErrors.claimant">
+            <select id="edit-claimant" v-model="editForm.claimant" class="field-input">
+              <option value="">Not recorded</option>
+              <option v-for="party in parties" :key="party.id" :value="party.id">
+                {{ party.name }} ({{ party.role }})
+              </option>
+            </select>
+          </FormField>
+          <FormField label="Respondent" for-id="edit-respondent" class="grow" :error="editErrors.respondent">
+            <select id="edit-respondent" v-model="editForm.respondent" class="field-input">
+              <option value="">Not recorded</option>
+              <option v-for="party in parties" :key="party.id" :value="party.id">
+                {{ party.name }} ({{ party.role }})
+              </option>
+            </select>
+          </FormField>
+        </div>
+
+        <div class="row gap-3 wrap">
+          <FormField label="Event date" for-id="edit-event" class="grow" :error="editErrors.event_date">
+            <input id="edit-event" v-model="editForm.event_date" class="field-input" type="date" />
+          </FormField>
+          <FormField
+            label="Awareness date"
+            for-id="edit-awareness"
+            class="grow"
+            :error="editErrors.awareness_date"
+            hint="When the claiming party knew, or should have known. Notice periods run from this."
+          >
+            <input id="edit-awareness" v-model="editForm.awareness_date" class="field-input" type="date" />
+          </FormField>
+        </div>
+
+        <div class="row gap-3 wrap">
+          <FormField label="Notice date" for-id="edit-notice" class="grow" :error="editErrors.notice_date">
+            <input id="edit-notice" v-model="editForm.notice_date" class="field-input" type="date" />
+          </FormField>
+          <FormField label="Submitted" for-id="edit-submitted" class="grow" :error="editErrors.submission_date">
+            <input id="edit-submitted" v-model="editForm.submission_date" class="field-input" type="date" />
+          </FormField>
+        </div>
+
+        <div class="row gap-3 wrap">
+          <FormField label="Amount claimed" for-id="edit-amount" class="grow" :error="editErrors.amount_claimed">
+            <input id="edit-amount" v-model="editForm.amount_claimed" class="field-input" type="number" step="0.01" />
+          </FormField>
+          <FormField label="Currency" for-id="edit-currency" class="grow" :error="editErrors.currency">
+            <input id="edit-currency" v-model="editForm.currency" class="field-input" type="text" maxlength="3" />
+          </FormField>
+          <FormField label="Time claimed (days)" for-id="edit-days" class="grow" :error="editErrors.time_claimed_days">
+            <input id="edit-days" v-model="editForm.time_claimed_days" class="field-input" type="number" />
+          </FormField>
+        </div>
+
+        <FormField
+          label="Clauses relied on"
+          for-id="edit-clauses"
+          :error="editErrors.contractual_basis"
+          hint="Comma separated, for example 44.1, 53.1"
+        >
+          <input id="edit-clauses" v-model="editForm.contractual_basis" class="field-input" type="text" />
+        </FormField>
+
+        <FormField label="The claimant's account" for-id="edit-description" :error="editErrors.description">
+          <textarea id="edit-description" v-model="editForm.description" class="field-input" rows="4" />
+        </FormField>
+      </div>
+
+      <template #footer>
+        <AppButton variant="ghost" label="Cancel" :disabled="editSaving" @click="editOpen = false" />
+        <AppButton
+          variant="primary"
+          label="Save claim"
+          :loading="editSaving"
+          :disabled="!editForm.title?.trim()"
+          @click="submitEdit"
+        />
+      </template>
+    </AppDialog>
+
     <AppDialog v-model="issueOpen" title="Add an issue" :busy="issueSaving">
       <div class="stack gap-4">
         <FormField label="Title" for-id="issue-title" required>
@@ -562,6 +867,43 @@ onMounted(load)
   font-size: var(--text-xs);
   background: var(--color-surface-sunken);
   border-radius: var(--radius-full);
+}
+
+.claim__screening {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  background: var(--color-surface-sunken, transparent);
+}
+
+.claim__screening.is-danger {
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger);
+}
+
+.claim__screening.is-warning {
+  color: var(--color-warning);
+  background: var(--color-warning-subtle);
+  border-color: var(--color-warning-border, var(--color-warning));
+}
+
+.claim__screening.is-info {
+  color: var(--color-info);
+  background: var(--color-info-subtle);
+  border-color: var(--color-info-border, var(--color-info));
+}
+
+.claim__screening.is-success {
+  color: var(--color-success);
+  background: var(--color-success-subtle);
+  border-color: var(--color-success-border, var(--color-success));
 }
 
 .claim__issues {

@@ -106,6 +106,11 @@ class ClaimSerializer(serializers.ModelSerializer):
         return [str(v).strip() for v in value if str(v).strip()]
 
 
+#: Ceiling on a bulk screening request. Generous against a register page,
+#: and a bound on what one request can cost.
+MAX_SCREENING_ROWS = 200
+
+
 class ClaimViewSet(viewsets.ModelViewSet):
     """Claims within projects the user may read."""
 
@@ -274,6 +279,28 @@ class ClaimViewSet(viewsets.ModelViewSet):
                     }
                     for c in chronology.conflicts
                 ],
+            }
+        )
+
+    @action(detail=False, methods=["get"], url_path="screening")
+    def screening_summary(self, request: Request) -> Response:
+        """Screening outcomes for a page of claims, for a register.
+
+        A bounded number of queries however many claims are asked for.
+        Screening each row on its own costs about seven queries and 120ms,
+        which is three seconds and 170 queries to render twenty-five rows.
+        """
+        from claimiq.claims.services.screening import screen_many, summary_payload
+
+        claims = list(self.filter_queryset(self.get_queryset())[:MAX_SCREENING_ROWS])
+        reports = screen_many(claims)
+        return Response(
+            {
+                "count": len(reports),
+                "results": {
+                    claim_id: summary_payload(report)
+                    for claim_id, report in reports.items()
+                },
             }
         )
 

@@ -17,6 +17,22 @@ function check(overrides = {}) {
   }
 }
 
+function area(overrides = {}) {
+  const checks = overrides.checks ?? [check()]
+  return {
+    code: 'notice',
+    label: 'Notice and procedural compliance',
+    outstanding: checks.filter((c) => ['incomplete', 'indeterminate', 'barred'].includes(c.status))
+      .length,
+    blocking_outstanding: checks.filter(
+      (c) => c.weight === 'blocking' && ['incomplete', 'indeterminate', 'barred'].includes(c.status),
+    ).length,
+    barred: checks.filter((c) => c.status === 'barred').length,
+    ...overrides,
+    checks,
+  }
+}
+
 function screening(overrides = {}) {
   return {
     claim_type: 'eot',
@@ -27,19 +43,18 @@ function screening(overrides = {}) {
       'Screening reads what has been recorded about this claim. It is not a view on whether the claim succeeds.',
     blocking_outstanding: 0,
     advisory_outstanding: 1,
-    areas: [
-      {
-        code: 'notice',
-        label: 'Notice and procedural compliance',
-        checks: [check(), check({ code: 'NC1', status: 'satisfied', detail: 'Periods run from 2026-08-12.', items: [] })],
-      },
-    ],
+    areas: [area()],
     ...overrides,
   }
 }
 
-function render(data = screening()) {
-  return mount(ScreeningPanel, { props: { screening: data } })
+function render(data = screening(), props = {}) {
+  return mount(ScreeningPanel, { props: { screening: data, ...props } })
+}
+
+/** The area tile that expands a group of checks. */
+function areaTile(wrapper, index = 0) {
+  return wrapper.findAll('.screen__area')[index]
 }
 
 describe('ScreeningPanel', () => {
@@ -53,21 +68,62 @@ describe('ScreeningPanel', () => {
     expect(render().text()).toContain('not a view on whether the claim succeeds')
   })
 
-  it('shows outstanding checks and hides satisfied ones until asked', async () => {
+  it('shows the five areas with their own state before any checks', () => {
+    const wrapper = render(
+      screening({
+        areas: [
+          area(),
+          area({ code: 'relief', label: 'Quantum and relief claimed', checks: [check({ code: 'QR1', status: 'satisfied', items: [] })] }),
+        ],
+      }),
+    )
+    const tiles = wrapper.findAll('.screen__area')
+    expect(tiles).toHaveLength(2)
+    expect(tiles[0].text()).toContain('1 to check')
+    expect(tiles[1].text()).toContain('All recorded')
+  })
+
+  it('opens an area that holds something blocking, and leaves the rest closed', () => {
+    const blocking = area({
+      code: 'event',
+      label: 'Event occurrence and causation',
+      checks: [check({ code: 'EV1', weight: 'blocking', detail: 'No event date is recorded.' })],
+    })
+    const wrapper = render(screening({ areas: [blocking, area()] }))
+
+    // The blocking area is open on arrival; the advisory one is not.
+    expect(wrapper.text()).toContain('No event date is recorded.')
+    expect(wrapper.text()).not.toContain('A notice went to a party other than')
+  })
+
+  it('expands an area when its tile is clicked', async () => {
     const wrapper = render()
-    expect(wrapper.text()).toContain('Did each notice go to the party')
+    expect(wrapper.text()).not.toContain('A notice went to a party other than')
+
+    await areaTile(wrapper).trigger('click')
+    expect(wrapper.text()).toContain('A notice went to a party other than')
+    expect(wrapper.text()).toContain('Clause 53.1 names the Engineer')
+    expect(wrapper.text()).toContain('Record the correct recipient')
+  })
+
+  it('hides satisfied checks until asked, then shows them', async () => {
+    const wrapper = render(
+      screening({
+        areas: [
+          area({
+            checks: [
+              check(),
+              check({ code: 'NC1', status: 'satisfied', detail: 'Periods run from 2026-08-12.', items: [] }),
+            ],
+          }),
+        ],
+      }),
+    )
+    await areaTile(wrapper).trigger('click')
     expect(wrapper.text()).not.toContain('Periods run from 2026-08-12')
 
-    await wrapper.find('button').trigger('click')
+    await wrapper.find('.screen button.btn, .screen button').trigger('click')
     expect(wrapper.text()).toContain('Periods run from 2026-08-12')
-  })
-
-  it('names the specific items a check objected to', () => {
-    expect(render().text()).toContain('Clause 53.1 names the Engineer')
-  })
-
-  it('offers the remedy for an outstanding check', () => {
-    expect(render().text()).toContain('Record the correct recipient')
   })
 
   it('marks a blocking check as blocking assessment', () => {
@@ -76,11 +132,11 @@ describe('ScreeningPanel', () => {
         outcome: 'not_ready',
         outcome_label: 'Not yet assessable',
         areas: [
-          {
+          area({
             code: 'event',
             label: 'Event occurrence and causation',
             checks: [check({ code: 'EV1', weight: 'blocking', detail: 'No event date is recorded.' })],
-          },
+          }),
         ],
       }),
     )
@@ -91,46 +147,23 @@ describe('ScreeningPanel', () => {
     const wrapper = render(
       screening({
         areas: [
-          {
-            code: 'event',
-            label: 'Event occurrence and causation',
+          area({
             checks: [check({ code: 'EV1', weight: 'blocking', status: 'satisfied', items: [] })],
-          },
+          }),
         ],
       }),
     )
-    await wrapper.find('button').trigger('click')
+    await areaTile(wrapper).trigger('click')
     expect(wrapper.text()).not.toContain('Blocks assessment')
   })
 
-  it('says so plainly when nothing is outstanding', () => {
-    const wrapper = render(
-      screening({
-        outcome: 'ready',
-        outcome_label: 'Assessable',
-        summary: '0 blocking and 0 advisory item(s) outstanding.',
-        advisory_outstanding: 0,
-        areas: [
-          {
-            code: 'notice',
-            label: 'Notice and procedural compliance',
-            checks: [check({ status: 'satisfied', items: [] })],
-          },
-        ],
-      }),
-    )
-    expect(wrapper.text()).toContain('Every applicable check is satisfied')
-  })
-
-  it('shows a possible time bar as the most serious outcome', () => {
+  it('lifts a possible time bar out of its area, where it cannot be missed', () => {
     const wrapper = render(
       screening({
         outcome: 'barred',
         outcome_label: 'Possible time bar — read the provision',
         areas: [
-          {
-            code: 'notice',
-            label: 'Notice and procedural compliance',
+          area({
             checks: [
               check({
                 code: 'NC4',
@@ -140,12 +173,33 @@ describe('ScreeningPanel', () => {
                 items: ['20.2.1'],
               }),
             ],
-          },
+          }),
         ],
       }),
     )
-    expect(wrapper.text()).toContain('Possible time bar')
-    expect(wrapper.text()).toContain('Possible bar')
+    const alert = wrapper.find('[role="alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Possible time bar')
+    expect(alert.text()).toContain('Notice under Clause 20.2.1 was given late.')
+    expect(alert.text()).toContain('not a determination')
+  })
+
+  it('offers an action only where the remedy can be acted on', async () => {
+    const wrapper = render(screening(), {
+      actions: { NC6: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' } },
+    })
+    await areaTile(wrapper).trigger('click')
+
+    const action = wrapper.findAll('button').find((b) => b.text().includes('Go to Notice'))
+    expect(action).toBeTruthy()
+    await action.trigger('click')
+    expect(wrapper.emitted('act')[0][0]).toMatchObject({ kind: 'tab', tab: 'notices' })
+  })
+
+  it('shows no action when the caller offers none', async () => {
+    const wrapper = render()
+    await areaTile(wrapper).trigger('click')
+    expect(wrapper.findAll('button').some((b) => b.text().includes('Go to Notice'))).toBe(false)
   })
 })
 
@@ -160,8 +214,19 @@ describe('ScreeningPanel against the live API payload', () => {
 
     expect(wrapper.text()).toContain('Assessable, with queries')
     expect(wrapper.text()).toContain('0 blocking and 5 advisory item(s) outstanding.')
-    expect(wrapper.text()).toContain('Clause 53.1 names the Engineer')
-    expect(wrapper.text()).toContain('money is claimed on a claim type that does not normally seek it')
+    expect(wrapper.findAll('.screen__area')).toHaveLength(5)
     expect(wrapper.text()).not.toContain('undefined')
+    expect(wrapper.text()).not.toContain('NaN')
+  })
+
+  it('summarises each area of the live payload without opening it', async () => {
+    const payload = (await import('./__fixtures__/screening.n55.json')).default
+    const wrapper = mount(ScreeningPanel, { props: { screening: payload } })
+
+    const tiles = wrapper.findAll('.screen__area').map((t) => t.text())
+    expect(tiles.find((t) => t.includes('Notice'))).toContain('3 to check')
+    expect(tiles.find((t) => t.includes('Contractual entitlement'))).toContain('All recorded')
+    // Nothing blocks, so nothing opens on arrival.
+    expect(wrapper.find('.screen__checks').exists()).toBe(false)
   })
 })

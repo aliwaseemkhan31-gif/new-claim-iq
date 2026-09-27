@@ -52,6 +52,17 @@ export function fetchScreening(claimId, config = {}) {
   return get(`/claims/${claimId}/screening/`, config)
 }
 
+/**
+ * Screening outcomes for a page of claims, keyed by claim id.
+ *
+ * A separate call rather than a field on the list: screening one claim costs
+ * about seven queries, so a register that screened each row inline would spend
+ * seconds rendering. The server does a page in a handful.
+ */
+export function fetchScreeningSummary(params = {}, config = {}) {
+  return get('/claims/screening/', { params, ...config })
+}
+
 export function fetchEvidenceGaps(claimId, config = {}) {
   return get(`/claims/${claimId}/evidence-gaps/`, config)
 }

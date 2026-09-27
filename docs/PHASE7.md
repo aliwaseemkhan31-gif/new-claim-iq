@@ -301,3 +301,53 @@ the notice went to the Employer where Clause 53.1 names the Engineer, and money
 is claimed on an extension-of-time claim — usually a second claim hiding inside
 the first. The live payload is captured as a fixture and asserted against the
 component, so a renamed field fails a test rather than blanking the panel.
+
+### Where screening is shown, and why
+
+First placement put the panel at the top of the claim's Overview tab. Three
+problems with that, all found by looking at it next to the workflow rather than
+on its own:
+
+- It sat directly above "What the claim must establish", so two similar-looking
+  checklists stacked on one screen. They answer different questions — readiness
+  to work on versus what the evidence establishes — and nothing said so.
+- Twenty-five checks read as a wall. The five areas are the mental model a
+  claims person already has, and they were buried inside it.
+- A possible time bar, the one outcome that is adverse on the contract rather
+  than on the state of the file, had to be found inside a list.
+- Nothing was visible across claims, which is where triage actually happens.
+
+Now:
+
+**Screening is its own stage, and leads the claim.** A tab of its own, first in
+the bar. A claim that cannot yet be assessed *opens* on it; one that can opens
+on the overview. The two checklists are on separate tabs, and the gap table now
+states the distinction in a line.
+
+**The state follows the claim.** A chip beside the status badges, on every tab,
+coloured by outcome and clicking through to the tab. A time bar is not
+something to go back and find.
+
+**Five areas first, checks behind them.** Each area shows its own state — all
+recorded, *n* to check, *n* blocking, possible bar. Areas holding something
+blocking open themselves; the rest wait to be asked. A barred check is lifted
+out of its area into an alert above everything.
+
+**Remedies do something.** Each outstanding check that corresponds to an action
+this application can perform offers it: go to the Notice tab, go to Evidence,
+open the project, or edit the field. Checks with no destination are left
+without one rather than linked somewhere unhelpful.
+
+**The register triages.** A Screening column on the claims register, loaded
+after the rows so the list stays fast, backed by a bulk endpoint that costs
+four queries for a page however many claims are on it — against seven queries
+and 120 ms *per claim* for the single-claim path.
+
+### Claim editing
+
+Added because screening needed it. Almost every outstanding check is "record
+this on the claim", and until now a claim could be created and never corrected
+anywhere in the UI — so the checklist pointed at fields nobody could edit. The
+dialog carries the same fields as claim creation; an emptied field is sent as
+null so it clears rather than silently keeping its old value, and screening is
+recomputed on save.

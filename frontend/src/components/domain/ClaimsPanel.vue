@@ -82,10 +82,42 @@ async function load() {
       ordering: '-created_at',
     })
     rows.value = rowsOf(data)
+    loadScreening()
   } catch (err) {
     error.value = err
   } finally {
     loading.value = false
+  }
+}
+
+// -- Screening ---------------------------------------------------------------
+//
+// Loaded after the rows, not with them: the register is useful the moment it
+// renders, and triage across claims is worth a second request rather than a
+// slower first one. A failure leaves the column blank and the register intact.
+
+const screening = ref({})
+
+const SCREENING_TONE = {
+  barred: 'danger',
+  not_ready: 'warning',
+  ready_with_queries: 'info',
+  ready: 'success',
+}
+
+async function loadScreening() {
+  screening.value = {}
+  if (!rows.value.length) return
+  try {
+    const data = await claimsApi.fetchScreeningSummary({
+      project: props.projectId || undefined,
+      search: query.value || undefined,
+      status: statusFilter.value || undefined,
+      claim_type: typeFilter.value || undefined,
+    })
+    screening.value = data.results ?? {}
+  } catch {
+    screening.value = {}
   }
 }
 
@@ -248,6 +280,7 @@ onMounted(load)
               <th v-if="showProject" scope="col">Project</th>
               <th scope="col">Type</th>
               <th scope="col">Status</th>
+              <th scope="col">Screening</th>
               <th scope="col" class="cell-numeric">Claimed</th>
               <th scope="col" class="cell-numeric">Time</th>
               <th scope="col">Assessment</th>
@@ -275,6 +308,16 @@ onMounted(load)
               <td v-if="showProject" class="text-xs">{{ claim.project_name || EM_DASH }}</td>
               <td>{{ claim.claim_type_label || claim.claim_type }}</td>
               <td><StatusBadge :status="claim.status" size="sm" /></td>
+              <td>
+                <StatusBadge
+                  v-if="screening[claim.id]"
+                  :tone="SCREENING_TONE[screening[claim.id].outcome]"
+                  :label="screening[claim.id].outcome_label"
+                  size="sm"
+                  :title="screening[claim.id].summary"
+                />
+                <span v-else class="text-xs text-muted">{{ EM_DASH }}</span>
+              </td>
               <td class="cell-numeric">
                 {{
                   claim.amount_claimed

@@ -10,6 +10,9 @@
     {
       "code": "entitlement",
       "label": "Contractual entitlement",
+      "blocking_outstanding": 0,
+      "outstanding": 0,
+      "barred": 0,
       "checks": [
         {
           "code": "CB1",
@@ -59,6 +62,9 @@
     {
       "code": "notice",
       "label": "Notice and procedural compliance",
+      "blocking_outstanding": 0,
+      "outstanding": 3,
+      "barred": 0,
       "checks": [
         {
           "code": "NC1",
@@ -151,6 +157,9 @@
     {
       "code": "event",
       "label": "Event occurrence and causation",
+      "blocking_outstanding": 0,
+      "outstanding": 1,
+      "barred": 0,
       "checks": [
         {
           "code": "EV1",
@@ -207,6 +216,9 @@
     {
       "code": "records",
       "label": "Supporting evidence and contemporary records",
+      "blocking_outstanding": 0,
+      "outstanding": 0,
+      "barred": 0,
       "checks": [
         {
           "code": "RC1",
@@ -249,6 +261,9 @@
     {
       "code": "relief",
       "label": "Quantum and relief claimed",
+      "blocking_outstanding": 0,
+      "outstanding": 1,
+      "barred": 0,
       "checks": [
         {
           "code": "QR1",
