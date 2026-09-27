@@ -319,6 +319,12 @@ AI_SETTINGS = {
     # ModelConfiguration table at call time, so an administrator can change it
     # without a deploy. The values below seed an empty installation only.
     "DEFAULT_LLM_MODEL": env_str("DEFAULT_LLM_MODEL", default=""),
+    # Reading a claim off a photograph is a one-off action someone waits for,
+    # and it is worth a slower, better model than interactive questioning can
+    # afford: measured on a real claim submission, qwen2.5:3b read 4 fields of
+    # 14 and the 7b read 7, including the clause and the date the 3b missed.
+    # Falls back to DEFAULT_LLM_MODEL when unset.
+    "DRAFTING_LLM_MODEL": env_str("DRAFTING_LLM_MODEL", default=""),
     "DEFAULT_EMBEDDING_MODEL": env_str("DEFAULT_EMBEDDING_MODEL", default=""),
     "DEFAULT_RERANKER_MODEL": env_str("DEFAULT_RERANKER_MODEL", default=""),
     "EMBEDDING_DIMENSIONS": env_int("EMBEDDING_DIMENSIONS", default=1024),

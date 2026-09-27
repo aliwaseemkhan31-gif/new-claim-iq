@@ -100,6 +100,130 @@ Answer concisely and in the register of a professional writing for a \
 colleague, not a chatbot."""
 
 
+#: Field names a claim document is read for. Kept beside the prompt because
+#: the schema, the example and the domain's EXTRACTABLE_FIELDS must agree.
+_CLAIM_FIELDS = (
+    "title",
+    "reference",
+    "claim_type",
+    "contractual_basis",
+    "claimant",
+    "respondent",
+    "event_date",
+    "awareness_date",
+    "notice_date",
+    "submission_date",
+    "amount_claimed",
+    "currency",
+    "time_claimed_days",
+    "description",
+)
+
+#: Flat, one key per field.
+#:
+#: The first version nested each field as {"value": ..., "quote": ...}. Against
+#: that schema both qwen2.5:3b and :7b returned every field null, and without
+#: the schema the 3b returned an unlabelled array of value/quote pairs with no
+#: field names at all — it could not hold the nesting and the field list at
+#: once. Flat keys, with the quotes gathered into one object, are read
+#: correctly by both.
+CLAIM_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": dict(
+        [(name, {"type": ["string", "number", "null"]}) for name in _CLAIM_FIELDS]
+        + [
+            (
+                "quotes",
+                {
+                    "type": "object",
+                    "properties": {
+                        name: {"type": ["string", "null"]} for name in _CLAIM_FIELDS
+                    },
+                },
+            ),
+            ("notes", {"type": "array", "items": {"type": "string"}}),
+        ]
+    ),
+    "required": list(_CLAIM_FIELDS),
+}
+
+
+CLAIM_EXTRACTION = PromptTemplate(
+    key="claim_extraction",
+    # 1.1.0: flattened the schema and added a worked example. See the note on
+    # CLAIM_EXTRACTION_SCHEMA for what the nested version did.
+    version="1.2.0",
+    system=(
+        "You read construction claim documents and report what they say. You "
+        "are transcribing, not assessing: you form no view on whether a claim "
+        "is good, and you decide nothing. A person checks every value you "
+        "return against the page."
+    ),
+    required_variables=frozenset({"document_text"}),
+    template="""Read the claim document below and report the fields it states.
+
+DOCUMENT
+{document_text}
+
+Return one key per field. Put the exact words you read each value from in \
+"quotes", under the same key. Where the document does not state a field, \
+return null for it.
+
+Shape of the answer. The angle brackets mark where your values go; never \
+copy the words inside them, and never return a value that is not on the page \
+above:
+
+{{
+  "title": "<the claim's title as the document gives it, or null>",
+  "reference": "<the claim number, or null>",
+  "claim_type": "<one of the codes listed below, or null>",
+  "contractual_basis": "<the clause numbers, as written, or null>",
+  "claimant": "<who is claiming, or null>",
+  "respondent": "<who it is against, or null>",
+  "event_date": "<when the event happened, or null>",
+  "awareness_date": "<when the claimant knew of it, or null>",
+  "notice_date": "<when notice was given, or null>",
+  "submission_date": "<when the claim was submitted, or null>",
+  "amount_claimed": "<the amount, written as the document writes it, or null>",
+  "currency": "<the currency, or null>",
+  "time_claimed_days": "<days of extension sought, or null>",
+  "description": "<the claimant's account of the event, short, or null>",
+  "quotes": {{
+    "<field name>": "<the exact words from the document you read it from>"
+  }},
+  "notes": ["<anything the reader needs to know>"]
+}}
+
+Rules:
+1. If the document does not state a field, return null. Do not work it out \
+from the other fields and do not supply a likely value. A blank field is \
+obviously missing; an invented one is not, which makes it the more dangerous \
+of the two.
+2. Every quote must be words copied from the document above. Do not quote text \
+you did not read the value from. Give a quote for every field you fill in: a \
+value with no quotation cannot be checked, and is reported as unconfirmed.
+2a. Never return a value that does not appear in the document above, and never \
+return the placeholder text from the shape. If the document is not a claim, or \
+you cannot read it, return null for every field and say so in "notes".
+3. The text was read off a photograph by OCR and may be imperfect. Where you \
+cannot read something with confidence, return null and say so in "notes". OCR \
+runs words together — "CLAUSE 53.3OF CONTRACT" is "Clause 53.3 of contract" — \
+so read through that rather than treating it as unreadable.
+4. Do not convert or total anything. Report an amount as the document writes \
+it. Where several amounts appear and it is not clear which is claimed, return \
+null and list the candidates in "notes".
+5. claim_type must be one of: eot, variation, cost, delay, disruption, \
+acceleration, payment, compensation_event, other. Return null where the \
+document does not make the type plain. A claim for money for overheads and \
+idle resources is "cost"; a claim for more time is "eot".
+6. contractual_basis is the clause numbers the claim is made under, as written.
+7. description is the claimant's own account of the event, kept short. It is \
+an assertion, not evidence.
+
+Respond with JSON in exactly the shape shown above.""",
+)
+
+
 GROUNDED_ANSWER = PromptTemplate(
     key="grounded_answer",
     version="1.2.0",
@@ -370,6 +494,7 @@ ALL_PROMPTS: tuple[PromptTemplate, ...] = (
     QUANTUM_ANALYSIS,
     COUNTERARGUMENTS_ANALYSIS,
     EVIDENCE_GAP_ANALYSIS,
+    CLAIM_EXTRACTION,
 )
 
 PROMPTS_BY_KEY: Mapping[str, PromptTemplate] = {p.key: p for p in ALL_PROMPTS}

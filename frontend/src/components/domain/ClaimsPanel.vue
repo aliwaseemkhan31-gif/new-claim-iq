@@ -131,6 +131,94 @@ function open(claim) {
   router.push({ name: 'claim-detail', params: { claimId: claim.id } })
 }
 
+// -- Drafting from a document ------------------------------------------------
+//
+// A claim arrives as paper: a bound submission, or a photograph of one taken
+// on a phone. Retyping it is the least valuable part of the job and the
+// easiest place to mistype a figure. This reads the pages and proposes a
+// claim, which then goes through the ordinary create form — so the review is
+// the form the person already knows, and nothing is saved until they save it.
+
+const draftOpen = ref(false)
+const draftFiles = ref([])
+const draftBusy = ref(false)
+const draftResult = ref(null)
+const draftError = ref(null)
+
+function openDraft() {
+  draftFiles.value = []
+  draftResult.value = null
+  draftError.value = null
+  draftOpen.value = true
+}
+
+function onDraftFiles(event) {
+  draftFiles.value = Array.from(event.target.files || [])
+  draftResult.value = null
+  draftError.value = null
+}
+
+async function runDraft() {
+  if (!draftFiles.value.length || draftBusy.value) return
+  draftBusy.value = true
+  draftError.value = null
+  try {
+    draftResult.value = await claimsApi.draftClaimFromDocument(
+      props.projectId,
+      draftFiles.value,
+    )
+  } catch (err) {
+    draftError.value = err
+  } finally {
+    draftBusy.value = false
+  }
+}
+
+/** Match a party named on the document to one recorded on the project. */
+function matchParty(name) {
+  if (!name) return ''
+  const wanted = String(name).trim().toLowerCase()
+  const hit = parties.value.find((party) => {
+    const known = (party.name || '').toLowerCase()
+    return known === wanted || known.includes(wanted) || wanted.includes(known)
+  })
+  return hit ? hit.id : ''
+}
+
+/**
+ * Carry the draft into the create form.
+ *
+ * Only fields the document actually stated are filled. A field it did not
+ * state is left blank rather than defaulted, so the reviewer sees the same gap
+ * the document has.
+ */
+async function acceptDraft() {
+  const values = {}
+  for (const field of draftResult.value?.draft?.fields ?? []) {
+    if (!field.found) continue
+    values[field.name] = Array.isArray(field.value)
+      ? field.value.join(', ')
+      : String(field.value)
+  }
+
+  await openCreate()
+
+  const claimant = matchParty(values.claimant)
+  const respondent = matchParty(values.respondent)
+  delete values.claimant
+  delete values.respondent
+
+  form.value = { ...form.value, ...values }
+  if (claimant) form.value.claimant = claimant
+  if (respondent) form.value.respondent = respondent
+
+  draftOpen.value = false
+  ui.notifySuccess(
+    'Draft ready for review',
+    'Nothing is saved yet. Check every field against the document before saving.',
+  )
+}
+
 // -- Creation ---------------------------------------------------------------
 
 const createOpen = ref(false)
@@ -239,6 +327,13 @@ onMounted(load)
       </div>
 
       <AppButton
+        v-if="canCreate && projectId"
+        variant="ghost"
+        icon="pi pi-camera"
+        label="From a document"
+        @click="openDraft"
+      />
+      <AppButton
         v-if="canCreate"
         variant="primary"
         icon="pi pi-plus"
@@ -335,6 +430,122 @@ onMounted(load)
         </table>
       </div>
     </div>
+
+    <AppDialog
+      v-model="draftOpen"
+      title="Draft a claim from a document"
+      description="Reads the pages and proposes a claim. Nothing is saved: the draft goes into the claim form for you to check against the document."
+      size="lg"
+      :busy="draftBusy"
+    >
+      <div class="stack gap-4">
+        <FormField
+          label="Claim document"
+          for-id="draft-files"
+          hint="Photographs, a scan or a PDF. The first few pages are read — the cover and the summary carry the fields."
+        >
+          <input
+            id="draft-files"
+            class="field-input"
+            type="file"
+            multiple
+            accept="image/*,application/pdf"
+            @change="onDraftFiles"
+          />
+        </FormField>
+
+        <div v-if="draftBusy" class="stack gap-2">
+          <LoadingSkeleton variant="text" :rows="3" />
+          <p class="text-xs text-muted">
+            Reading the pages and drafting. This runs on this machine and takes a
+            few minutes on a CPU.
+          </p>
+        </div>
+
+        <ErrorState
+          v-else-if="draftError"
+          :error="draftError"
+          title="The document could not be read"
+          :show-retry="false"
+        />
+
+        <template v-else-if="draftResult">
+          <div class="surface draft__summary">
+            <p class="text-sm">{{ draftResult.draft.summary }}</p>
+            <p class="text-xs text-muted">
+              Read by {{ draftResult.model }} in {{ draftResult.seconds }}s from
+              {{ draftResult.pages.length }} page(s). Every value below is a proposal to
+              check against the document, not a fact.
+            </p>
+          </div>
+
+          <ul v-if="draftResult.draft.notes.length" class="draft__notes">
+            <li v-for="note in draftResult.draft.notes" :key="note" class="text-sm">
+              {{ note }}
+            </li>
+          </ul>
+
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Proposed</th>
+                  <th scope="col">Read from the document</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="field in draftResult.draft.fields" :key="field.name">
+                  <td class="text-sm">{{ field.label }}</td>
+                  <td>
+                    <span v-if="field.found" class="draft__value">
+                      {{ Array.isArray(field.value) ? field.value.join(', ') : field.value }}
+                    </span>
+                    <span v-else class="text-xs text-muted">Not stated</span>
+                    <p v-if="field.note" class="text-xs text-warning">{{ field.note }}</p>
+                  </td>
+                  <td class="text-xs text-muted">
+                    <template v-if="field.quote">
+                      <span :class="{ 'text-danger': !field.quote_verified }">
+                        “{{ field.quote }}”
+                      </span>
+                      <span v-if="!field.quote_verified" class="text-danger">
+                        — these words are not in the document; check this one against the page.
+                      </span>
+                    </template>
+                    <span v-else-if="field.found">No quotation given.</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <details class="draft__text">
+            <summary class="text-sm">What was read off the pages</summary>
+            <pre class="draft__ocr">{{ draftResult.document_text }}</pre>
+          </details>
+        </template>
+      </div>
+
+      <template #footer>
+        <AppButton variant="ghost" label="Cancel" :disabled="draftBusy" @click="draftOpen = false" />
+        <AppButton
+          v-if="!draftResult"
+          variant="primary"
+          label="Read the document"
+          :loading="draftBusy"
+          :disabled="!draftFiles.length"
+          @click="runDraft"
+        />
+        <AppButton
+          v-else
+          variant="primary"
+          icon="pi pi-check"
+          label="Review in the claim form"
+          @click="acceptDraft"
+        />
+      </template>
+    </AppDialog>
 
     <AppDialog
       v-model="createOpen"
@@ -445,6 +656,32 @@ onMounted(load)
 </template>
 
 <style scoped>
+.draft__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.draft__notes {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--color-warning);
+}
+
+.draft__value {
+  font-weight: var(--weight-medium);
+}
+
+.draft__ocr {
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  background: var(--color-surface-sunken, transparent);
+  border-radius: var(--radius-sm);
+}
+
 .claims__panel {
   overflow: hidden;
 }

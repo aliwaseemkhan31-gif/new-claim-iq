@@ -53,6 +53,20 @@ export function fetchScreening(claimId, config = {}) {
 }
 
 /**
+ * Read a photographed or scanned claim and propose a claim from it.
+ *
+ * Writes nothing: the response is a draft for a person to correct and accept.
+ * Slow by nature — OCR plus a model call on a CPU — so callers should show
+ * that it is working rather than appearing to hang.
+ */
+export function draftClaimFromDocument(projectId, files) {
+  const body = new FormData()
+  body.append('project', projectId)
+  for (const file of files) body.append('files', file)
+  return post('/claims/draft-from-document/', body)
+}
+
+/**
  * Screening outcomes for a page of claims, keyed by claim id.
  *
  * A separate call rather than a field on the list: screening one claim costs

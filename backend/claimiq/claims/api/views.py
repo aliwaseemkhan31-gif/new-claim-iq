@@ -5,6 +5,7 @@ from django.db.models import QuerySet
 from django.utils import timezone
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -281,6 +282,38 @@ class ClaimViewSet(viewsets.ModelViewSet):
                 ],
             }
         )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="draft-from-document",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def draft_from_document(self, request: Request) -> Response:
+        """Read a photographed or scanned claim and propose a claim from it.
+
+        **Writes nothing.** The response is a draft for the person who uploaded
+        it to correct and accept; the claim exists only when they save it
+        through the ordinary create endpoint. This is the one place a model's
+        output would otherwise become the record, so the review is the control.
+
+        Synchronous: OCR plus one model call, on a page someone is waiting in
+        front of. Minutes on a CPU-only host.
+        """
+        from claimiq.claims.services.drafting import draft_from_upload
+
+        project_id = request.data.get("project")
+        if not project_id:
+            raise ValidationError("A 'project' is required.")
+        self._require(CLAIM_CREATE.code, project_id)
+
+        uploads = request.FILES.getlist("files") or request.FILES.getlist("file")
+        if not uploads:
+            raise ValidationError("Attach the claim document to read.")
+
+        result = draft_from_upload(uploads)
+        result["project"] = str(project_id)
+        return Response(result)
 
     @action(detail=False, methods=["get"], url_path="screening")
     def screening_summary(self, request: Request) -> Response:
