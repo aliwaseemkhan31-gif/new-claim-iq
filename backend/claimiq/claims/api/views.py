@@ -277,6 +277,26 @@ class ClaimViewSet(viewsets.ModelViewSet):
             }
         )
 
+    @action(detail=True, methods=["get"])
+    def screening(self, request: Request, pk: str | None = None) -> Response:
+        """Preliminary screening: is this claim in a fit state to work on?
+
+        Reads the claim as recorded — no evidence assessment, no model. It runs
+        the moment a claim is entered, which is the point: the evidence-gap
+        engine cannot distinguish a claim nobody has worked yet from one that
+        cannot be established, and this can.
+
+        Computed on demand. A stored result goes stale the moment the missing
+        date is recorded, and a stale "not assessable" is worse than none.
+        """
+        from claimiq.claims.services.screening import payload, screen
+
+        claim = self.get_object()
+        self._require(CLAIM_VIEW.code, str(claim.project_id))
+        report = payload(screen(claim))
+        report["claim"] = str(claim.id)
+        return Response(report)
+
     @action(detail=True, methods=["get"], url_path="evidence-gaps")
     def evidence_gaps(self, request: Request, pk: str | None = None) -> Response:
         """What the claim must establish, and what the record does not.

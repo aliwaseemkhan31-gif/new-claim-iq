@@ -9,6 +9,7 @@ import AppButton from '@/components/common/AppButton.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
+import ScreeningPanel from '@/components/domain/ScreeningPanel.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import AnalysisPanel from '@/components/domain/AnalysisPanel.vue'
@@ -73,6 +74,7 @@ const claim = ref(null)
 const project = ref(null)
 const gaps = ref(null)
 const notice = ref(null)
+const screening = ref(null)
 const loading = ref(true)
 const error = ref(null)
 
@@ -86,11 +88,13 @@ function setTab(next) {
 }
 
 async function loadComputed() {
-  const [gapResult, noticeResult] = await Promise.allSettled([
+  const [gapResult, noticeResult, screeningResult] = await Promise.allSettled([
     claimsApi.fetchEvidenceGaps(props.claimId),
     claimsApi.fetchNoticeCompliance(props.claimId),
+    claimsApi.fetchScreening(props.claimId),
   ])
   gaps.value = gapResult.status === 'fulfilled' ? gapResult.value : null
+  screening.value = screeningResult.status === 'fulfilled' ? screeningResult.value : null
   notice.value =
     noticeResult.status === 'fulfilled'
       ? noticeResult.value
@@ -253,6 +257,8 @@ onMounted(load)
 
       <!-- Overview -->
       <template v-if="tab === 'overview'">
+        <ScreeningPanel v-if="screening" :screening="screening" />
+
         <section v-if="claim.description" class="surface claim__section">
           <p class="section-title">The claimant’s account</p>
           <p class="claim__description">{{ claim.description }}</p>

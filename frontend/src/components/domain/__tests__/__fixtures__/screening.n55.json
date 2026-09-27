@@ -1,0 +1,309 @@
+{
+  "claim_type": "eot",
+  "outcome": "ready_with_queries",
+  "outcome_label": "Assessable, with queries",
+  "summary": "0 blocking and 5 advisory item(s) outstanding.",
+  "caveat": "Screening reads what has been recorded about this claim. It is not a view on whether the claim succeeds, and a claim that passes every check may still fail on the contract or the facts.",
+  "blocking_outstanding": 0,
+  "advisory_outstanding": 5,
+  "areas": [
+    {
+      "code": "entitlement",
+      "label": "Contractual entitlement",
+      "checks": [
+        {
+          "code": "CB1",
+          "question": "Has the project declared which conditions of contract govern it?",
+          "why": "Without a declared edition no notice period can be computed and no standard-form text can be retrieved. An edition is never assumed (ADR 0004).",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "Governed by FIDIC Red Book 1987 (4th Edition).",
+          "items": [],
+          "remedy": "Set the conditions of contract on the project."
+        },
+        {
+          "code": "CB2",
+          "question": "Does the claim say which provisions it relies on?",
+          "why": "A claim that names no provision cannot be tested against one. It also leaves retrieval with nothing to look up: the entitlement strand builds its query from these clause numbers.",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "Relies on Clause 44.1, Clause 53.1.",
+          "items": [
+            "44.1",
+            "53.1"
+          ],
+          "remedy": "Record the clause numbers relied on, for example 44.1, 53.1."
+        },
+        {
+          "code": "CB3",
+          "question": "Do those provisions appear in the declared edition?",
+          "why": "A clause number from the wrong edition, or a typo, sends every later retrieval to the wrong place or to nothing at all.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "Every clause relied on was found in the published text.",
+          "items": [],
+          "remedy": "Check the clause number, or publish the standard form for this edition."
+        },
+        {
+          "code": "CB4",
+          "question": "Are the claimant and the respondent identified?",
+          "why": "A claim is made by someone against someone. The respondent also decides whether a notice went to the right party, which NC6 tests.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "Both parties are recorded.",
+          "items": [],
+          "remedy": "Record both parties, adding them to the project first if needed."
+        }
+      ]
+    },
+    {
+      "code": "notice",
+      "label": "Notice and procedural compliance",
+      "checks": [
+        {
+          "code": "NC1",
+          "question": "Is the awareness date recorded?",
+          "why": "Every notice period runs from it. It is also the most commonly disputed date in the file, which is why it is recorded separately from the event date rather than inferred from it.",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "Periods run from 2026-08-12.",
+          "items": [],
+          "remedy": "Record when the claiming party knew, or should have known."
+        },
+        {
+          "code": "NC2",
+          "question": "Are notice requirements registered for this edition?",
+          "why": "Periods from another edition are never substituted. Where none are registered, the honest answer is that nothing can be computed.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "Notice requirements are registered for FIDIC Red Book 1987 (4th Edition).",
+          "items": [],
+          "remedy": ""
+        },
+        {
+          "code": "NC3",
+          "question": "Is a notice on record for each requirement?",
+          "why": "Absence from the record is not proof that no notice was given, but it is what the file shows, and it is what a respondent tests first.",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "A notice is on record for every requirement.",
+          "items": [],
+          "remedy": "Record the letter as correspondence, then assert it as a Notice under the clause it was given under."
+        },
+        {
+          "code": "NC4",
+          "question": "Is any notice late under a condition precedent?",
+          "why": "This is the one thing screening can find that defeats a claim on the recorded facts alone, and it is worth finding on day one rather than after the evidence is assembled.",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "No notice is late under a condition precedent.",
+          "items": [],
+          "remedy": "Read the provision and its stated consequence. A computed bar is a reason to take advice, not a determination."
+        },
+        {
+          "code": "NC5",
+          "question": "Is any notice late under a provision that is not a condition precedent?",
+          "why": "Late notice that does not bar the claim still weakens it and invites an argument about prejudice.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "No notice is late.",
+          "items": [],
+          "remedy": ""
+        },
+        {
+          "code": "NC6",
+          "question": "Did each notice go to the party the provision names?",
+          "why": "A notice to the Employer under a clause naming the Engineer is a live argument. assess_notice already produces this warning; screening surfaces it at the front instead of inside a tab.",
+          "weight": "advisory",
+          "status": "incomplete",
+          "detail": "A notice went to a party other than the one the provision names.",
+          "items": [
+            "Clause 53.1 names the Engineer; the notice went to National Highway Authority (the Employer)"
+          ],
+          "remedy": "Record the correct recipient, or note why the addressee stands."
+        },
+        {
+          "code": "NC7",
+          "question": "Is the receipt date recorded for each notice relied on?",
+          "why": "Most notice provisions turn on receipt. Where it is unknown the sent date is used and the assumption recorded, which is a weaker position than it appears.",
+          "weight": "advisory",
+          "status": "incomplete",
+          "detail": "No receipt date is recorded, so the sent date has been used. Most notice provisions turn on receipt.",
+          "items": [
+            "Clause 53.1 \u2014 Notice of claim \u2014 delayed access to Section 2 embankment works"
+          ],
+          "remedy": "Record the receipt date, or the proof of delivery."
+        },
+        {
+          "code": "NC8",
+          "question": "Has a person confirmed each notice satisfies its provision?",
+          "why": "Whether a letter is a Notice under a provision is contested, and the system records it as an assertion rather than a fact. An unconfirmed assertion should not read as compliance.",
+          "weight": "advisory",
+          "status": "incomplete",
+          "detail": "A notice relied on has not been confirmed as satisfying its provision. Whether a letter is a Notice is contested, and an unconfirmed assertion should not read as compliance.",
+          "items": [
+            "Clause 53.1 \u2014 Notice of claim \u2014 delayed access to Section 2 embankment works"
+          ],
+          "remedy": "Read the letter against the provision and confirm it, or do not."
+        }
+      ]
+    },
+    {
+      "code": "event",
+      "label": "Event occurrence and causation",
+      "checks": [
+        {
+          "code": "EV1",
+          "question": "Is the date of the event recorded?",
+          "why": "Without it there is no chronology, and no way to test whether the awareness date is credible.",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "The event is recorded as occurring on 2026-08-10.",
+          "items": [],
+          "remedy": "Record the date the event or circumstance occurred."
+        },
+        {
+          "code": "EV2",
+          "question": "Is the claimant account of the event recorded?",
+          "why": "The narrative is what a reader assesses everything else against. It is also the claimant own account, and is treated as an assertion rather than evidence throughout.",
+          "weight": "advisory",
+          "status": "incomplete",
+          "detail": "No account of the event is recorded. It is the claimant's own assertion, not evidence, but a reader assesses everything else against it.",
+          "items": [],
+          "remedy": "Record what happened, in the claimant own words."
+        },
+        {
+          "code": "EV3",
+          "question": "Are the event and awareness dates consistent?",
+          "why": "An awareness date before the event is a data-entry error, and it silently shifts every notice deadline earlier.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "Awareness is recorded on or after the event.",
+          "items": [],
+          "remedy": "Correct whichever date is wrong."
+        },
+        {
+          "code": "EV4",
+          "question": "Are the recorded dates in the past?",
+          "why": "A future event date is a typo, and it produces negative deadlines.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "The recorded dates are in the past.",
+          "items": [],
+          "remedy": "Correct the date."
+        },
+        {
+          "code": "EV5",
+          "question": "Is the instruction relied on identified?",
+          "why": "A variation or acceleration claim stands or falls on a valid instruction from someone with authority. Without one identified there is nothing to test.",
+          "weight": "advisory",
+          "status": "not_applicable",
+          "detail": "Does not apply to a claim of this type.",
+          "items": [],
+          "remedy": "Record the instruction as correspondence and link it."
+        }
+      ]
+    },
+    {
+      "code": "records",
+      "label": "Supporting evidence and contemporary records",
+      "checks": [
+        {
+          "code": "RC1",
+          "question": "Has any record been identified in support of the claim?",
+          "why": "A claim with no record identified at all is an assertion. This is not a judgement on sufficiency, only on whether the work has started.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "2 record(s) identified. Whether they establish the claim is assessed separately.",
+          "items": [],
+          "remedy": "Link the records relied on, or note that gathering has not begun."
+        },
+        {
+          "code": "RC2",
+          "question": "What records will this claim type require?",
+          "why": "Naming them at the outset is more useful than reporting their absence later, when the contemporaneous records may no longer be obtainable.",
+          "weight": "informational",
+          "status": "satisfied",
+          "detail": "What a claim of this type is normally evidenced by. Worth obtaining now, while contemporaneous records still exist.",
+          "items": [
+            "The triggering event: daily report, site record, photograph, meeting minutes",
+            "Notice given in time: notice, letter, email",
+            "Causation: programme, updated programme, progress report, daily report",
+            "Responsibility: conditions of contract, particular conditions, engineers instruction",
+            "Time impact: programme, updated programme"
+          ],
+          "remedy": ""
+        },
+        {
+          "code": "RC3",
+          "question": "Are the records contemporaneous?",
+          "why": "A record made at the time carries weight that one reconstructed afterwards does not, and many provisions require contemporary records in terms.",
+          "weight": "informational",
+          "status": "satisfied",
+          "detail": "Not computed, and deliberately so. Whether a record was made at the time depends on when it was actually made, which is not held here: a document date is the date printed on it, and an upload date is when someone got round to it. Judge contemporaneity by reading the record.",
+          "items": [],
+          "remedy": ""
+        }
+      ]
+    },
+    {
+      "code": "relief",
+      "label": "Quantum and relief claimed",
+      "checks": [
+        {
+          "code": "QR1",
+          "question": "Does the claim state what it asks for?",
+          "why": "A claim with no relief stated cannot be determined, and cannot be valued or programmed against.",
+          "weight": "blocking",
+          "status": "satisfied",
+          "detail": "Claims 30 day(s) and PKR 4500000.00.",
+          "items": [],
+          "remedy": "Record the time claimed, the amount claimed, or both."
+        },
+        {
+          "code": "QR2",
+          "question": "Is a currency recorded against the amount?",
+          "why": "An amount without a currency cannot be totalled across a register or stated in a determination. The claims register already groups by currency and shows a no-currency bucket.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "Amount claimed in PKR.",
+          "items": [],
+          "remedy": "Record the currency of the amount claimed."
+        },
+        {
+          "code": "QR3",
+          "question": "Is the relief claimed a positive quantity?",
+          "why": "Zero or negative relief is a data-entry error, not a claim.",
+          "weight": "advisory",
+          "status": "satisfied",
+          "detail": "The relief claimed is a positive quantity.",
+          "items": [],
+          "remedy": "Correct the figure."
+        },
+        {
+          "code": "QR4",
+          "question": "Does the relief match what the claim type normally seeks?",
+          "why": "Money on an extension-of-time claim, or time on a payment claim, is not wrong, but it usually means the claim type is wrong or a second claim is hiding inside this one.",
+          "weight": "advisory",
+          "status": "incomplete",
+          "detail": "Not an error, but it usually means the claim type is wrong or a second claim is hiding inside this one.",
+          "items": [
+            "money is claimed on a claim type that does not normally seek it"
+          ],
+          "remedy": "Check the claim type, or split the claim."
+        },
+        {
+          "code": "QR5",
+          "question": "Is the basis of calculation stated?",
+          "why": "An amount with no build-up behind it is a number, and it is the first thing a respondent will ask for.",
+          "weight": "informational",
+          "status": "satisfied",
+          "detail": "Not computed: no field holds a basis of calculation. Record it as a claim issue of category quantum, with the build-up attached as evidence.",
+          "items": [],
+          "remedy": ""
+        }
+      ]
+    }
+  ],
+  "claim": "068eddc6-e2d6-4c9c-a5cd-8772925f379e"
+}

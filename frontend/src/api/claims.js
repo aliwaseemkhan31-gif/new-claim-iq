@@ -47,6 +47,11 @@ export function fetchClaimTimeline(claimId, params = {}, config = {}) {
 }
 
 /** Deterministic: what the claim must establish against the evidence on record. */
+/** Preliminary screening: is the claim in a fit state to work on? */
+export function fetchScreening(claimId, config = {}) {
+  return get(`/claims/${claimId}/screening/`, config)
+}
+
 export function fetchEvidenceGaps(claimId, config = {}) {
   return get(`/claims/${claimId}/evidence-gaps/`, config)
 }

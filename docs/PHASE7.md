@@ -258,3 +258,46 @@ reconstruction, so what the reader sees is always literal source text.
 
 Until then the 3B stays the default. A grounding failure now records the
 quotation it objected to, which is how the above was diagnosed.
+
+---
+
+## Preliminary claim screening
+
+Audited first: the five areas of a claims admissibility checklist — contractual
+entitlement, notice, event occurrence and causation, contemporary records,
+quantum — all existed in substance, spread across the evidence-gap engine, the
+notice computation, the analysis strands and the 12-section report. What did
+not exist was a *stage*. Every one of those runs late: the gap engine derives
+its elements from the issue a piece of evidence is attached to, so a claim
+raised this morning reports 0% established, which is also what a hopeless claim
+reports. Entitlement and quantum had no deterministic component at all.
+
+Screening fills that. 25 checks (`claims/domain/screening.py`), declared as
+data and evaluated by one pure function over a snapshot of the claim as
+recorded — no evidence assessment, no model, answerable the moment a claim is
+entered. Computed on demand at `GET /claims/{id}/screening/`, alongside
+evidence-gaps and notice-compliance; nothing is stored, because a screening
+result written once goes stale as soon as the missing date is recorded.
+
+Design constraints, all tested:
+
+- **Only one check can be adverse to the claim.** NC4 returns BARRED for notice
+  late under a condition precedent — the single conclusion the system can reach
+  from recorded facts. The other 24 report on the state of the file. A test
+  asserts no other check can return BARRED.
+- **No score.** Four outcomes and a fixed caveat. A percentage would be read as
+  a probability of success, and `GapReport.is_complete` already carries the
+  warning about conflating record completeness with merit.
+- **One cause, not a column of failures.** A missing awareness date makes six
+  notice checks INDETERMINATE naming NC1, not six separate failures.
+- **What cannot be computed says so.** Contemporaneity (RC3) and basis of
+  calculation (QR5) are stated as uncomputable rather than inferred: a document
+  date is the date printed on it, and an upload date is when someone got round
+  to it.
+
+Run against CL-001 on the N-55 project it returns "Assessable, with queries" and
+finds five things, including two the existing screens did not surface together:
+the notice went to the Employer where Clause 53.1 names the Engineer, and money
+is claimed on an extension-of-time claim — usually a second claim hiding inside
+the first. The live payload is captured as a fixture and asserted against the
+component, so a renamed field fails a test rather than blanking the panel.
