@@ -52,6 +52,9 @@ export function fetchScreening(claimId, config = {}) {
   return get(`/claims/${claimId}/screening/`, config)
 }
 
+/** Reading pages and drafting runs for minutes on a CPU. */
+const DRAFT_TIMEOUT_MS = 15 * 60 * 1000
+
 /**
  * Read a photographed or scanned claim and propose a claim from it.
  *
@@ -63,7 +66,10 @@ export function draftClaimFromDocument(projectId, files) {
   const body = new FormData()
   body.append('project', projectId)
   for (const file of files) body.append('files', file)
-  return post('/claims/draft-from-document/', body)
+  // OCR of several pages plus one model call, on a CPU. The client's default
+  // 30 s aborts it mid-read, which shows as a dialog that closes with no
+  // explanation rather than as a failure.
+  return post('/claims/draft-from-document/', body, { timeout: DRAFT_TIMEOUT_MS })
 }
 
 /**
