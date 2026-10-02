@@ -305,7 +305,13 @@ ALLOWED_UPLOAD_MIME_TYPES = env_list(
 
 AI_SETTINGS = {
     "OLLAMA_BASE_URL": env_str("OLLAMA_BASE_URL", default="http://ollama:11434"),
-    "OLLAMA_TIMEOUT_SECONDS": env_int("OLLAMA_TIMEOUT_SECONDS", default=300),
+    # Raised from 300 after it cost real work: on a processor-only host the
+    # 7B model took longer than five minutes on two claim-analysis strands,
+    # and each was recorded as a provider failure rather than an answer. A
+    # generous client timeout is safe here because generation is separately
+    # bounded by LLM_MAX_OUTPUT_TOKENS below — the runtime cannot run away,
+    # it can only be slow.
+    "OLLAMA_TIMEOUT_SECONDS": env_int("OLLAMA_TIMEOUT_SECONDS", default=900),
     # Every generation is bounded. Unbounded, a small model constrained to a
     # JSON schema can repeat itself until the context fills; Ollama keeps
     # generating after the client has timed out, and every later request —

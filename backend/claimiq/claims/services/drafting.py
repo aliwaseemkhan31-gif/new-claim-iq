@@ -27,15 +27,28 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger("claimiq.claims.drafting")
 
 #: Pages read from one upload. A claim submission runs to hundreds of pages,
-#: and the fields this reads for are on the first few: the cover, the summary,
-#: the letter. Reading further costs minutes and adds tables that crowd the
-#: prompt without adding a field.
-MAX_PAGES = 6
+#: and the fields this reads for are usually on the first few: the cover, the
+#: summary, the letter. Reading further costs minutes and adds tables that
+#: crowd the prompt without adding a field.
+#:
+#: Raised from 6 after a real submission was read wrongly because of it: a
+#: 9-page claim whose first eight pages were annexures — cost breakdowns and
+#: measurement sheets — had its covering letter cut off, so no date reached the
+#: model and every notice and time-bar check screened as unanswerable. Six
+#: pages is a safe assumption about where the fields are only when the
+#: submission leads with its letter, and these do not.
+MAX_PAGES = 15
 
 #: Characters of document text put in front of the model. Enough for several
 #: pages of a claim submission; beyond it the prompt crowds out the answer on
 #: a small local model.
-MAX_PROMPT_CHARS = 12_000
+#:
+#: Raised alongside MAX_PAGES: reading more pages achieves nothing if the text
+#: is then cut before the model sees it. A 9-page submission came to 12,114
+#: characters and lost its tail to the old 12,000 limit. At roughly four
+#: characters per token this is about 4,000 tokens, which leaves room within
+#: LLM_CONTEXT_TOKENS (8,192) for the instructions and the answer.
+MAX_PROMPT_CHARS = 16_000
 
 
 def _read_pages(upload: "UploadedFile", *, max_pages: int = MAX_PAGES) -> Tuple[str, List[dict]]:
@@ -102,6 +115,45 @@ def _read_pages(upload: "UploadedFile", *, max_pages: int = MAX_PAGES) -> Tuple[
             pass
 
 
+def _coverage_notes(
+    document_text: str, pages: "List[dict]", unread: "List[str]"
+) -> "List[str]":
+    """Say plainly what the model was not shown.
+
+    Silent truncation is the failure mode worth guarding against here. On a
+    real submission the first eight pages were annexures and the covering
+    letter fell outside the page limit, so the draft reported no date —
+    indistinguishable, to a reviewer, from a claim that states none.
+    """
+    notes: List[str] = []
+    if unread:
+        notes.append(
+            "Not every file was read: {} was left unopened after the {}-page "
+            "limit was reached. Any field it states is missing from this "
+            "draft.".format(", ".join(unread), MAX_PAGES)
+        )
+    if len(pages) >= MAX_PAGES:
+        notes.append(
+            "The {}-page limit was reached, so later pages were not read. If "
+            "the claim letter sits behind the annexures, its date and "
+            "reference are not in this draft.".format(MAX_PAGES)
+        )
+    if len(document_text) > MAX_PROMPT_CHARS:
+        notes.append(
+            "Only the first {:,} characters of {:,} were put in front of the "
+            "model; the remainder was not read.".format(
+                MAX_PROMPT_CHARS, len(document_text)
+            )
+        )
+    low = [p for p in pages if (p.get("confidence") or 0) < 0.55]
+    if low:
+        notes.append(
+            "{} page(s) were read with low confidence, so values from them are "
+            "worth checking against the original.".format(len(low))
+        )
+    return notes
+
+
 def draft_from_upload(uploads: "Sequence[UploadedFile]") -> dict:
     """Read one or more claim documents and propose a claim from them.
 
@@ -127,10 +179,17 @@ def draft_from_upload(uploads: "Sequence[UploadedFile]") -> dict:
 
     texts: List[str] = []
     pages: List[dict] = []
+    # What was *not* read matters as much as what was. A field reported missing
+    # from a document whose later pages were never opened is a different fact
+    # from one the document does not state, and the reviewer cannot tell them
+    # apart unless told.
+    unread: List[str] = []
     budget = MAX_PAGES
     for upload in uploads:
+        name = getattr(upload, "name", None) or "a file"
         if budget <= 0:
-            break
+            unread.append(name)
+            continue
         text, read = _read_pages(upload, max_pages=budget)
         budget -= max(len(read), 1)
         if text.strip():
@@ -197,6 +256,8 @@ def draft_from_upload(uploads: "Sequence[UploadedFile]") -> dict:
         raise ProcessingError("The model did not return a readable draft.")
 
     draft: ClaimDraft = build_draft(payload, source_text=document_text)
+    for note in _coverage_notes(document_text, pages, unread):
+        draft.notes.append(note)
     logger.info(
         "claims.drafted",
         extra={

@@ -489,9 +489,176 @@ FIDIC_1987_NOTICE_OF_CLAIM = NoticeRequirement(
     ),
 )
 
+# --- The 1999 suite -------------------------------------------------------
+#
+# Sub-Clause 20.1 [Contractor's Claims] is common to the 1999 Red, Yellow and
+# Silver Books: notice within 28 days of awareness, expressed as a condition
+# precedent, and a fully detailed claim within 42 days. The recipient differs,
+# because the Silver Book is an EPC/Turnkey form with no Engineer.
+#
+# Verified against the Silver Book 1999 text held in this installation's
+# knowledge base:
+#
+#   "The notice shall be given as soon as practicable, and not later than 28
+#    days after the Contractor became aware, or should have become aware, of
+#    the event or circumstance. If the Contractor fails to give notice of a
+#    claim within such period of 28 days, the Time for Completion shall not be
+#    extended, the Contractor shall not be entitled to additional payment, and
+#    the Employer shall be discharged from all liability in connection with
+#    the claim."
+
+FIDIC_1999_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
+    clause_number="20.1",
+    edition="silver-book-1999",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the Contractor became aware, or should have become aware, "
+        "of the event or circumstance"
+    ),
+    is_condition_precedent=True,
+    recipient="the Employer",
+    description=(
+        "Notice of claim. The Silver Book has no Engineer, so notice is given "
+        "to the Employer. Late notice discharges the Employer from all "
+        "liability in connection with the claim."
+    ),
+)
+
+FIDIC_1999_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    clause_number="20.1",
+    edition="silver-book-1999",
+    period_days=42,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the Contractor became aware, or should have become aware, "
+        "of the event or circumstance"
+    ),
+    is_condition_precedent=False,
+    recipient="the Employer",
+    description=(
+        "Fully detailed claim with full supporting particulars. The contract "
+        "allows another period where the Contractor proposes one and the "
+        "Employer approves it, so check the correspondence before relying on "
+        "the 42 days."
+    ),
+)
+
+FIDIC_1999_RED_NOTICE_OF_CLAIM = NoticeRequirement(
+    clause_number="20.1",
+    edition="red-book-1999",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the Contractor became aware, or should have become aware, "
+        "of the event or circumstance"
+    ),
+    is_condition_precedent=True,
+    recipient="the Engineer",
+    description=(
+        "Notice of claim. Taken from the 1999 suite's common Sub-Clause 20.1, "
+        "which this installation holds and has verified in its Silver Book "
+        "edition; the Red Book differs in addressing notice to the Engineer. "
+        "Confirm against the Particular Conditions before relying on it."
+    ),
+)
+
+FIDIC_1999_RED_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    clause_number="20.1",
+    edition="red-book-1999",
+    period_days=42,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the Contractor became aware, or should have become aware, "
+        "of the event or circumstance"
+    ),
+    is_condition_precedent=False,
+    recipient="the Engineer",
+    description=(
+        "Fully detailed claim with full supporting particulars. Another period "
+        "may be agreed with the Engineer."
+    ),
+)
+
+# --- The rest of the 2017 suite -------------------------------------------
+#
+# Clause 20.2 is common to the 2017 Red, Yellow and Silver Books. Verified
+# against the Yellow Book 2017 text held in the knowledge base:
+#
+#   "The claiming Party shall give a Notice to the Engineer ... as soon as
+#    practicable, and no later than 28 days after the claiming Party became
+#    aware, or should have become aware, of the event or circumstance ... If
+#    the claiming Party fails to give a Notice of Claim within this period of
+#    28 days, ... the other Party shall be discharged from any liability in
+#    connection with the event or circumstance giving rise to the Claim."
+
+FIDIC_2017_YELLOW_NOTICE_OF_CLAIM = NoticeRequirement(
+    clause_number="20.2.1",
+    edition="yellow-book-2017",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the claiming Party became aware, or should have become "
+        "aware, of the event or circumstance"
+    ),
+    is_condition_precedent=True,
+    recipient="the Engineer",
+    description="Notice of Claim",
+)
+
+FIDIC_2017_YELLOW_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    clause_number="20.2.4",
+    edition="yellow-book-2017",
+    period_days=84,
+    day_count=DayCount.CALENDAR,
+    trigger_description="the date of awareness of the event or circumstance",
+    is_condition_precedent=False,
+    recipient="the Engineer",
+    description="fully detailed Claim",
+)
+
+FIDIC_2017_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
+    clause_number="20.2.1",
+    edition="silver-book-2017",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the claiming Party became aware, or should have become "
+        "aware, of the event or circumstance"
+    ),
+    is_condition_precedent=True,
+    recipient="the Employer",
+    description=(
+        "Notice of Claim. Taken from Clause 20.2, common to the 2017 suite and "
+        "verified here in the Yellow Book edition; the Silver Book has no "
+        "Engineer, so notice is given to the Employer. This installation's "
+        "Silver Book 2017 is a scanned copy that has not been read, so confirm "
+        "against the Particular Conditions before relying on it."
+    ),
+)
+
+FIDIC_2017_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    clause_number="20.2.4",
+    edition="silver-book-2017",
+    period_days=84,
+    day_count=DayCount.CALENDAR,
+    trigger_description="the date of awareness of the event or circumstance",
+    is_condition_precedent=False,
+    recipient="the Employer",
+    description="fully detailed Claim",
+)
+
 KNOWN_REQUIREMENTS: tuple[NoticeRequirement, ...] = (
     FIDIC_2017_NOTICE_OF_CLAIM,
     FIDIC_2017_FULLY_DETAILED_CLAIM,
+    FIDIC_2017_YELLOW_NOTICE_OF_CLAIM,
+    FIDIC_2017_YELLOW_FULLY_DETAILED_CLAIM,
+    FIDIC_2017_SILVER_NOTICE_OF_CLAIM,
+    FIDIC_2017_SILVER_FULLY_DETAILED_CLAIM,
+    FIDIC_1999_RED_NOTICE_OF_CLAIM,
+    FIDIC_1999_RED_FULLY_DETAILED_CLAIM,
+    FIDIC_1999_SILVER_NOTICE_OF_CLAIM,
+    FIDIC_1999_SILVER_FULLY_DETAILED_CLAIM,
     FIDIC_1987_NOTICE_OF_CLAIM,
 )
 

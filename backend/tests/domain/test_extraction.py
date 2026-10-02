@@ -330,3 +330,88 @@ def test_a_field_the_document_does_not_state_is_not_reported_as_unconfirmed() ->
     """Absent is a clean answer, not a doubtful one."""
     draft = build_draft({"title": None}, source_text=COVER)
     assert draft.unverified_fields == []
+
+
+# ---------------------------------------------------------------------------
+# Date formats found on real submissions
+# ---------------------------------------------------------------------------
+#
+# Added after a claim drafted from a scanned FIDIC submission produced no date
+# at all. The cause turned out to be upstream — the covering letter fell
+# outside the page limit — but the formats below appear on this kind of
+# correspondence and were not accepted.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("14/03/24", date(2024, 3, 14)),
+        ("14-03-24", date(2024, 3, 14)),
+        ("14.03.24", date(2024, 3, 14)),
+        ("14 Mar 24", date(2024, 3, 14)),
+        ("14Mar2024", date(2024, 3, 14)),
+        ("2024/03/14", date(2024, 3, 14)),
+        ("2024.03.14", date(2024, 3, 14)),
+        ("2024-03-14T09:30:00", date(2024, 3, 14)),
+        ("2024-03-14 09:30:00", date(2024, 3, 14)),
+    ],
+)
+def test_dates_written_as_scanned_correspondence_writes_them(raw, expected) -> None:
+    parsed, note = normalise_date(raw)
+    assert parsed == expected, note
+    assert note == ""
+
+
+def test_a_day_first_reading_is_preferred() -> None:
+    """These are FIDIC contracts outside the United States."""
+    parsed, _ = normalise_date("03/04/2024")
+    assert parsed == date(2024, 4, 3)
+
+
+def test_a_month_without_a_day_is_refused_rather_than_assumed() -> None:
+    """Inventing the 1st could move a notice period across its deadline."""
+    parsed, note = normalise_date("March 2024")
+    assert parsed is None
+    assert "could not be read as a date" in note
+
+
+def test_an_unreadable_date_says_so_rather_than_vanishing() -> None:
+    parsed, note = normalise_date("U1Jan.2UUU")
+    assert parsed is None
+    assert note, "a dropped date must not look like a document that stated none"
+
+
+# ---------------------------------------------------------------------------
+# A currency is read or reported absent, never invented
+# ---------------------------------------------------------------------------
+#
+# "Total Amount (Mn)" on a real cost summary yielded a currency of "MN", which
+# then sat in the claim record beside the figure and made it look checked.
+
+
+@pytest.mark.parametrize(
+    "raw", ["Mn", "MN", "mn", "QTY", "NOS", "Cum", "Sm", "xyz", "Amount"]
+)
+def test_a_non_currency_is_not_turned_into_one(raw) -> None:
+    assert normalise_currency(raw) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("PKR", "PKR"), ("pkr", "PKR"), ("Rs.", "PKR"), ("rupees", "PKR"),
+        ("USD", "USD"), ("$", "USD"), ("GBP", "GBP"), ("EUR", "EUR"),
+        ("JPY", "JPY"), ("AED", "AED"), ("SAR", "SAR"),
+    ],
+)
+def test_a_real_currency_is_read(raw, expected) -> None:
+    assert normalise_currency(raw) == expected
+
+
+def test_the_iso_set_covers_the_currencies_these_projects_use() -> None:
+    from claimiq.claims.domain.extraction import ISO_4217_CODES
+
+    for code in ("PKR", "USD", "EUR", "GBP", "AED", "SAR", "CNY", "TRY"):
+        assert code in ISO_4217_CODES
+    for fake in ("MN", "QTY", "NOS"):
+        assert fake not in ISO_4217_CODES

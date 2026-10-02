@@ -348,8 +348,66 @@ def test_the_two_editions_differ_on_condition_precedent() -> None:
 
 
 def test_unregistered_edition_returns_nothing_rather_than_substituting() -> None:
-    """Applying 2017 periods to a 1999 contract is the ADR 0004 error."""
-    assert requirements_for_edition("red-book-1999") == ()
+    """Applying one form's periods to another is the ADR 0004 error.
+
+    Uses a form this catalogue does not cover at all. Every FIDIC edition the
+    knowledge base recognises is now registered, which is the point of
+    :func:`test_every_catalogued_edition_has_notice_requirements` below.
+    """
+    assert requirements_for_edition("nec4-option-c") == ()
+    assert requirements_for_edition("") == ()
+
+
+def test_every_catalogued_edition_has_notice_requirements() -> None:
+    """A recognised edition with no requirements silently skips the analysis.
+
+    Observed on a real Silver Book 1999 project: the notice_compliance strand
+    reported "No notice requirements are registered for FIDIC Silver Book" and
+    was skipped, so the one question a claims system exists to answer was never
+    asked. Unregistered must mean unknown-to-the-product, not merely unwritten.
+    """
+    from claimiq.knowledge.domain.editions import DEFAULT_REGISTRY
+
+    missing = [
+        edition.code
+        for edition in DEFAULT_REGISTRY.editions()
+        if not requirements_for_edition(edition.code)
+    ]
+    assert missing == [], f"editions with no notice requirements: {missing}"
+
+
+def test_the_silver_books_address_notice_to_the_employer() -> None:
+    """There is no Engineer under an EPC/Turnkey form."""
+    for code in ("silver-book-1999", "silver-book-2017"):
+        recipients = {r.recipient for r in requirements_for_edition(code)}
+        assert recipients == {"the Employer"}, code
+
+
+def test_the_engineer_forms_address_notice_to_the_engineer() -> None:
+    for code in ("red-book-1999", "red-book-2017", "yellow-book-2017", "red-book-1987"):
+        recipients = {r.recipient for r in requirements_for_edition(code)}
+        assert recipients == {"the Engineer"}, code
+
+
+def test_notice_periods_match_the_suite_each_edition_belongs_to() -> None:
+    """1999 suite: 28 days then 42. 2017 suite: 28 days then 84."""
+    for code in ("red-book-1999", "silver-book-1999"):
+        periods = sorted(r.period_days for r in requirements_for_edition(code))
+        assert periods == [28, 42], code
+    for code in ("red-book-2017", "silver-book-2017", "yellow-book-2017"):
+        periods = sorted(r.period_days for r in requirements_for_edition(code))
+        assert periods == [28, 84], code
+
+
+def test_the_1999_and_2017_notices_are_conditions_precedent() -> None:
+    """Both suites discharge the other Party on late notice; 1987 does not."""
+    for code in (
+        "red-book-1999", "silver-book-1999",
+        "red-book-2017", "silver-book-2017", "yellow-book-2017",
+    ):
+        first = min(requirements_for_edition(code), key=lambda r: r.period_days)
+        assert first.is_condition_precedent is True, code
+    assert FIDIC_1987_NOTICE_OF_CLAIM.is_condition_precedent is False
 
 
 # ---------------------------------------------------------------------------

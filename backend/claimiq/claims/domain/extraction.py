@@ -86,6 +86,23 @@ CLAIM_TYPES: Tuple[str, ...] = (
 #: Currency codes seen on the contracts this is used with, plus the majors.
 #: Used only to recognise a symbol or name; an unrecognised code is kept as
 #: given, upper-cased, for the reviewer to correct.
+#: ISO 4217 alphabetic codes. A three-letter string is accepted as a currency
+#: only when it is one of these — see :func:`normalise_currency` for why.
+ISO_4217_CODES: frozenset = frozenset(
+    """
+    AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND
+    BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU
+    CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP
+    GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES
+    KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD
+    MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD OMR
+    PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD
+    SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS
+    UAH UGX USD UYI UYU UYW UZS VED VES VND VUV WST XAF XCD XCG XDR XOF XPF
+    YER ZAR ZMW ZWG
+    """.split()
+)
+
 _CURRENCY_WORDS: Mapping[str, str] = {
     "rs": "PKR",
     "rs.": "PKR",
@@ -121,6 +138,12 @@ _AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
 _WS_RE = re.compile(r"\s+")
 
 #: How a date may be written on a claim document.
+#:
+#: Day-first before month-first throughout: these are FIDIC contracts on
+#: projects outside the United States, and reading 03/04/2024 as 3 April is
+#: right far more often than 4 March. A two-digit year is accepted because
+#: scanned correspondence and fax headers carry them, and Python maps 69-99 to
+#: the 1900s and 00-68 to the 2000s, which is correct for construction records.
 _DATE_FORMATS: Tuple[str, ...] = (
     "%Y-%m-%d",
     "%d/%m/%Y",
@@ -133,6 +156,22 @@ _DATE_FORMATS: Tuple[str, ...] = (
     "%B %d %Y",
     "%d-%b-%Y",
     "%d %B, %Y",
+    # Added after a real submission: two-digit years, dotted and spaced
+    # separators, an ISO timestamp, and the no-space form a fax header prints.
+    "%d/%m/%y",
+    "%d-%m-%y",
+    "%d.%m.%y",
+    "%d %b %y",
+    "%d %B %y",
+    "%d%b%Y",
+    "%d%b%y",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    # Deliberately no month-only format. "March 2024" would parse to the 1st,
+    # and a day this parser invented could move a notice period across its
+    # deadline. A date that cannot be read is reported as unreadable.
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
 )
 
 
@@ -336,6 +375,15 @@ def normalise_amount(value: Any) -> Tuple[Optional[Decimal], str]:
 
 
 def normalise_currency(value: Any) -> Optional[str]:
+    """Read a currency, or report none.
+
+    Only a recognised word or a real ISO 4217 code is accepted. Taking the
+    first three letters of whatever was supplied fabricates currencies: a
+    claim summary reading "Total Amount (Mn)" yielded "MN", which is not a
+    currency and which then travelled into the claim record beside a figure,
+    making the figure look checked when it was not. A currency this cannot
+    read is better reported as absent.
+    """
     text = normalise_text(value)
     if not text:
         return None
@@ -343,7 +391,9 @@ def normalise_currency(value: Any) -> Optional[str]:
     if lowered in _CURRENCY_WORDS:
         return _CURRENCY_WORDS[lowered]
     letters = re.sub(r"[^A-Za-z]", "", text).upper()
-    return letters[:3] or None
+    if letters in ISO_4217_CODES:
+        return letters
+    return None
 
 
 def normalise_days(value: Any) -> Tuple[Optional[int], str]:
