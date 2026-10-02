@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+
+import { useRoute, useRouter } from 'vue-router'
 
 import * as adminApi from '@/api/admin'
 import AppButton from '@/components/common/AppButton.vue'
@@ -17,7 +19,15 @@ import { rowsOf } from '@/utils/viewer'
 /**
  * Administration: who has access, what this installation can do, and what the
  * background workers are doing.
+ *
+ * The section is in the URL rather than in a ref. Model selection lives on
+ * the System tab and is the longest-running thing in here, and as local state
+ * it had no address: Back left administration altogether instead of leaving
+ * the section, a reload dropped the operator on Users, and a detection in
+ * progress could not be linked to or returned to.
  */
+const route = useRoute()
+const router = useRouter()
 const ui = useUiStore()
 
 const TABS = [
@@ -26,7 +36,10 @@ const TABS = [
   ['jobs', 'Jobs'],
 ]
 
-const tab = ref('users')
+const tab = computed(() =>
+  TABS.some(([id]) => id === route.query.tab) ? String(route.query.tab) : 'users'
+)
+
 const users = ref([])
 const roles = ref([])
 const system = ref(null)
@@ -57,9 +70,15 @@ async function load() {
 }
 
 function switchTab(next) {
-  tab.value = next
-  load()
+  if (next === tab.value) return
+  // `replace`: moving between sections of one screen is not a step in the
+  // journey, so Back leaves administration rather than retracing the tabs.
+  router.replace({ query: { ...route.query, tab: next } })
 }
+
+// Covers arriving on a deep link and the browser's own Back and Forward, not
+// just the tab strip.
+watch(tab, load, { immediate: true })
 
 // -- Users ------------------------------------------------------------------
 
@@ -147,25 +166,26 @@ async function resetPassword() {
   }
 }
 
-onMounted(load)
 </script>
 
 <template>
   <div class="page">
     <header class="stack gap-2">
       <h1 class="admin__title">Administration</h1>
-      <nav class="admin__tabs" aria-label="Administration sections">
+      <div class="admin__tabs" role="tablist" aria-label="Administration sections">
         <button
           v-for="[id, label] in TABS"
           :key="id"
           type="button"
+          role="tab"
           class="admin__tab"
           :class="{ 'is-active': tab === id }"
+          :aria-selected="tab === id"
           @click="switchTab(id)"
         >
           {{ label }}
         </button>
-      </nav>
+      </div>
     </header>
 
     <div v-if="loading" class="surface admin__pad"><LoadingSkeleton variant="table" :rows="6" /></div>

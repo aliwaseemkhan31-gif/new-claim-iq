@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+
+import { useRoute, useRouter } from 'vue-router'
 
 import * as searchApi from '@/api/search'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -10,7 +12,7 @@ import AppButton from '@/components/common/AppButton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import CitationLink from '@/components/domain/CitationLink.vue'
 import ProjectPicker from '@/components/domain/ProjectPicker.vue'
-import { useProjectsStore } from '@/stores/projects'
+import { useProjectSelection } from '@/composables/useProjectSelection'
 import { LAYER_STANDARD_FORM, sourceLayer } from '@/utils/viewer'
 
 /**
@@ -20,10 +22,12 @@ import { LAYER_STANDARD_FORM, sourceLayer } from '@/utils/viewer'
  * Results are passages, not a generated answer, and each says which corpus it
  * came from.
  */
-const projects = useProjectsStore()
+const route = useRoute()
+const router = useRouter()
 
-const projectId = ref(null)
-const query = ref('')
+const { projectId } = useProjectSelection()
+
+const query = ref(route.query.q ? String(route.query.q) : '')
 const scopes = ref(['documents', 'knowledge'])
 const result = ref(null)
 const loading = ref(false)
@@ -53,11 +57,18 @@ function toggleScope(scope) {
 
 async function run() {
   if (!canSearch.value) return
+  // The term goes in the URL so a result set can be sent to a colleague, and
+  // so returning from a passage comes back to the search rather than to a
+  // blank form.
+  const term = query.value.trim()
+  if ((route.query.q ? String(route.query.q) : '') !== term) {
+    router.replace({ query: { ...route.query, q: term || undefined } })
+  }
   loading.value = true
   error.value = null
   try {
     result.value = await searchApi.search({
-      query: query.value.trim(),
+      query: term,
       projectId: projectId.value,
       scopes: scopes.value,
     })
@@ -69,8 +80,20 @@ async function run() {
   }
 }
 
+// Back and Forward move between searches, and a pasted link runs its own.
+watch(
+  () => route.query.q,
+  (value) => {
+    const term = value ? String(value) : ''
+    if (term === query.value.trim()) return
+    query.value = term
+    if (term) run()
+    else result.value = null
+  }
+)
+
 onMounted(() => {
-  projectId.value = projects.activeProjectId
+  if (query.value.trim() && projectId.value) run()
 })
 </script>
 

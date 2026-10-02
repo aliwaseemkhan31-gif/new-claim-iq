@@ -4,11 +4,12 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import * as knowledgeApi from '@/api/knowledge'
-import AppButton from '@/components/common/AppButton.vue'
+import BackLink from '@/components/common/BackLink.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PageViewer from '@/components/domain/PageViewer.vue'
+import { useUiStore } from '@/stores/ui'
 import { clampPage } from '@/utils/viewer'
 
 /**
@@ -21,6 +22,7 @@ const props = defineProps({
 
 const route = useRoute()
 const router = useRouter()
+const ui = useUiStore()
 
 const base = ref(null)
 const clauses = ref([])
@@ -47,6 +49,7 @@ async function load() {
   error.value = null
   try {
     base.value = await knowledgeApi.fetchKnowledgeBase(props.knowledgeBaseId)
+    ui.setBreadcrumbLeaf(base.value.edition_label)
     const data = await knowledgeApi.listKnowledgeBaseClauses(props.knowledgeBaseId).catch(() => null)
     clauses.value = data?.results ?? []
   } catch (err) {
@@ -72,12 +75,9 @@ onMounted(load)
       <header class="row between gap-3 wrap">
         <div>
           <div class="row gap-2 wrap">
-            <AppButton
-              size="sm"
-              variant="ghost"
-              icon="pi pi-arrow-left"
-              label="Knowledge base"
-              :to="{ name: 'knowledge-base-detail', params: { knowledgeBaseId } }"
+            <BackLink
+              :fallback-to="{ name: 'knowledge-base-detail', params: { knowledgeBaseId } }"
+              fallback-label="Edition"
             />
             <h1 class="viewer-page__title">{{ base.edition_label }}</h1>
             <StatusBadge :status="base.status" size="sm" />

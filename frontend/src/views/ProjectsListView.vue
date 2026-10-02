@@ -12,8 +12,10 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import Pager from '@/components/common/Pager.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import { useAsyncData } from '@/composables/useAsyncData'
+import { useListQuery } from '@/composables/useListQuery'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { EM_DASH, formatDate, formatRelative } from '@/utils/format'
@@ -23,17 +25,26 @@ const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
 
-const query = ref('')
-const statusFilter = ref('')
-const page = ref(1)
 const PAGE_SIZE = 25
+
+const {
+  q,
+  status: statusFilter,
+  page,
+  isFiltered: hasFilters,
+  clear: clearFilters,
+  snapshot,
+} = useListQuery({ q: '', status: '', page: 1 })
+
+// Local while it is being typed, settling into the URL once it stops.
+const query = ref(q.value)
 
 const canCreate = computed(() => auth.hasPermission('org.projects.manage'))
 
 const request = useAsyncData(({ signal }) =>
   projectsApi.listProjects(
     {
-      search: query.value || undefined,
+      search: q.value || undefined,
       status: statusFilter.value || undefined,
       page: page.value,
       page_size: PAGE_SIZE,
@@ -57,21 +68,22 @@ const pageCount = computed(() => {
   return value.pages ?? Math.max(1, Math.ceil((value.count ?? 0) / PAGE_SIZE))
 })
 
-const hasFilters = computed(() => Boolean(query.value || statusFilter.value))
-
+// Typing settles into the URL; the URL is what triggers a fetch, so the
+// filter and page survive a reload and come back on the way back from a
+// project.
 let debounce = null
-watch([query, statusFilter], () => {
-  page.value = 1
+watch(query, (value) => {
   clearTimeout(debounce)
-  debounce = setTimeout(() => request.execute(), 250)
+  debounce = setTimeout(() => {
+    q.value = value.trim()
+  }, 250)
 })
 
-watch(page, () => request.execute())
+watch(q, (value) => {
+  if (value !== query.value.trim()) query.value = value
+})
 
-function clearFilters() {
-  query.value = ''
-  statusFilter.value = ''
-}
+watch(snapshot, () => request.execute())
 
 function openProject(project) {
   router.push({ name: 'project-overview', params: { projectId: project.id } })
@@ -272,28 +284,14 @@ onMounted(() => request.execute())
         </table>
       </div>
 
-      <footer
-        v-if="!request.loading.value && rows.length > 0 && pageCount > 1"
-        class="projects__pager"
-      >
-        <span class="text-xs text-muted">Page {{ page }} of {{ pageCount }}</span>
-        <div class="row gap-2">
-          <AppButton
-            size="sm"
-            label="Previous"
-            icon="pi pi-angle-left"
-            :disabled="page <= 1"
-            @click="page -= 1"
-          />
-          <AppButton
-            size="sm"
-            label="Next"
-            icon-right="pi pi-angle-right"
-            :disabled="page >= pageCount"
-            @click="page += 1"
-          />
-        </div>
-      </footer>
+      <Pager
+        v-if="!request.loading.value && rows.length > 0"
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        unit="projects"
+        @update:page="page = $event"
+      />
     </div>
 
     <AppDialog
@@ -465,13 +463,5 @@ onMounted(() => request.execute())
 .projects__sub {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
-}
-
-.projects__pager {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--color-border-subtle);
 }
 </style>

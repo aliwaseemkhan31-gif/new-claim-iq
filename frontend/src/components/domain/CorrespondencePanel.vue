@@ -8,6 +8,7 @@ import AppButton from '@/components/common/AppButton.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
+import ListLimitNotice from '@/components/common/ListLimitNotice.vue'
 import FormField from '@/components/common/FormField.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
@@ -53,7 +54,10 @@ const DIRECTIONS = [
   ['internal', 'Internal'],
 ]
 
+const PAGE_LIMIT = 100
+
 const rows = ref([])
+const total = ref(null)
 const parties = ref([])
 const claims = ref([])
 const loading = ref(true)
@@ -75,9 +79,10 @@ async function load() {
       project: props.projectId,
       claim: props.claimId && scope.value === 'claim' ? props.claimId : undefined,
       kind: kindFilter.value || undefined,
-      page_size: 100,
+      page_size: PAGE_LIMIT,
     })
     rows.value = rowsOf(data)
+    total.value = Array.isArray(data) ? data.length : (data?.count ?? rows.value.length)
   } catch (err) {
     error.value = err
   } finally {
@@ -352,6 +357,12 @@ onMounted(load)
           </tbody>
         </table>
       </div>
+
+      <!-- Stated rather than paged: for a claim this list floats the items
+           asserted as Notices to the top of the whole result, and a page
+           boundary would hide the ones that have not been asserted yet — the
+           very letters the user is here to find. -->
+      <ListLimitNotice :shown="PAGE_LIMIT" :total="total" unit="items" />
     </div>
 
     <AppDialog

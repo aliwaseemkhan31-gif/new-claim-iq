@@ -8,8 +8,10 @@ import AppButton from '@/components/common/AppButton.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
+import Pager from '@/components/common/Pager.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import UploadDocumentDialog from '@/components/domain/UploadDocumentDialog.vue'
+import { useListQuery } from '@/composables/useListQuery'
 import { usePolling } from '@/composables/usePolling'
 import { useAuthStore } from '@/stores/auth'
 import { EM_DASH, formatBytes, formatDate, formatRelative } from '@/utils/format'
@@ -29,13 +31,28 @@ const props = defineProps({
 const router = useRouter()
 const auth = useAuthStore()
 
-const query = ref('')
-const typeFilter = ref('')
+const PAGE_SIZE = 25
+
+const { q, type: typeFilter, page, snapshot, isFiltered, clear } = useListQuery({
+  q: '',
+  type: '',
+  page: 1,
+})
+
+// The box is local and settles into the URL, so a search term becomes an
+// address once the user stops typing rather than once per keystroke.
+const search = ref(q.value)
+
 const rows = ref([])
+const total = ref(null)
 const taxonomy = ref([])
 const loading = ref(true)
 const error = ref(null)
 const uploadOpen = ref(false)
+
+const pageCount = computed(() =>
+  total.value == null ? 1 : Math.max(1, Math.ceil(total.value / PAGE_SIZE))
+)
 
 const canUpload = computed(
   () => Boolean(props.projectId) && auth.canInProject(props.projectId, 'document.upload')
@@ -47,21 +64,26 @@ const inFlight = computed(() =>
   )
 )
 
-async function fetchRows() {
-  const data = await documentsApi.listDocuments({
+function fetchPayload() {
+  return documentsApi.listDocuments({
     project: props.projectId || undefined,
-    search: query.value || undefined,
+    search: q.value || undefined,
     document_type: typeFilter.value || undefined,
-    page_size: 100,
+    page: page.value,
+    page_size: PAGE_SIZE,
   })
-  return rowsOf(data)
+}
+
+function applyPayload(data) {
+  rows.value = rowsOf(data)
+  total.value = Array.isArray(data) ? data.length : (data?.count ?? rows.value.length)
 }
 
 async function load() {
   loading.value = true
   error.value = null
   try {
-    rows.value = await fetchRows()
+    applyPayload(await fetchPayload())
     if (inFlight.value) polling.start({ immediate: false })
   } catch (err) {
     error.value = err
@@ -70,22 +92,31 @@ async function load() {
   }
 }
 
-const polling = usePolling(fetchRows, {
+const polling = usePolling(fetchPayload, {
   interval: 5000,
   isDone: (data) =>
-    !data.some((row) =>
+    !rowsOf(data).some((row) =>
       ['pending', 'queued', 'processing'].includes(row.current_version?.processing_status)
     ),
-  onData: (data) => {
-    rows.value = data
-  },
+  onData: applyPayload,
 })
 
+// Typing settles into the URL; the URL is what triggers a fetch. Back and
+// Forward therefore reload the register exactly as it was.
 let debounce = null
-watch([query, typeFilter], () => {
+watch(search, (value) => {
   clearTimeout(debounce)
-  debounce = setTimeout(load, 250)
+  debounce = setTimeout(() => {
+    q.value = value.trim()
+  }, 250)
 })
+
+// Keeps the box in step when the query changes from outside it.
+watch(q, (value) => {
+  if (value !== search.value.trim()) search.value = value
+})
+
+watch(snapshot, load)
 
 function open(document) {
   router.push({ name: 'document-viewer', params: { documentId: document.id } })
@@ -112,7 +143,7 @@ onMounted(async () => {
     <div class="toolbar between">
       <div class="toolbar">
         <input
-          v-model="query"
+          v-model="search"
           class="field-input documents__search"
           type="search"
           placeholder="Filter by title or reference"
@@ -158,10 +189,13 @@ onMounted(async () => {
       />
 
       <EmptyState
-        v-else-if="!rows.length && (query || typeFilter)"
+        v-else-if="!rows.length && isFiltered"
         icon="pi pi-filter-slash"
         title="No documents match"
         description="Nothing here matches the current filter."
+        action-label="Clear the filter"
+        action-icon="pi pi-filter-slash"
+        @action="clear"
       />
 
       <EmptyState
@@ -231,6 +265,15 @@ onMounted(async () => {
           </tbody>
         </table>
       </div>
+
+      <Pager
+        v-if="!loading && !error && rows.length"
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        unit="documents"
+        @update:page="page = $event"
+      />
     </div>
 
     <UploadDocumentDialog

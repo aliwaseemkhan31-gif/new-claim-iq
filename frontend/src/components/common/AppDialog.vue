@@ -1,5 +1,7 @@
 <script setup>
-import { nextTick, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+
+import { useModal } from '@/composables/useModal'
 
 /**
  * A modal dialog for forms and detail panels.
@@ -25,20 +27,22 @@ function close() {
   emit('close')
 }
 
-watch(
-  () => props.modelValue,
-  async (open) => {
-    if (!open) return
-    await nextTick()
-    const target = panel.value?.querySelector('input, select, textarea, button:not([data-dialog-close])')
-    ;(target || panel.value)?.focus?.()
+const { onKeydown } = useModal(
+  computed(() => props.modelValue),
+  panel,
+  {
+    onRequestClose: close,
+    // Open on the first field, not on the close button: the dialog exists to
+    // be filled in.
+    initialFocus: () =>
+      panel.value?.querySelector('input, select, textarea, button:not([data-dialog-close])'),
   }
 )
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="dialog__overlay" @click.self="close">
+    <div v-if="modelValue" class="dialog__overlay" @click.self="close" @keydown="onKeydown">
       <div
         ref="panel"
         class="dialog"
@@ -47,7 +51,6 @@ watch(
         aria-modal="true"
         :aria-label="title"
         tabindex="-1"
-        @keydown.esc="close"
       >
         <header class="dialog__header">
           <div class="grow">

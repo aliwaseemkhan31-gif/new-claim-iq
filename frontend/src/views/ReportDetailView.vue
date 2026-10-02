@@ -3,9 +3,11 @@ import { onMounted, ref } from 'vue'
 
 import * as reportsApi from '@/api/reports'
 import AppButton from '@/components/common/AppButton.vue'
+import BackLink from '@/components/common/BackLink.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import ReportDocumentView from '@/components/domain/ReportDocumentView.vue'
+import { useUiStore } from '@/stores/ui'
 import { formatDateTime } from '@/utils/format'
 
 /**
@@ -14,6 +16,8 @@ import { formatDateTime } from '@/utils/format'
 const props = defineProps({
   reportId: { type: String, required: true },
 })
+
+const ui = useUiStore()
 
 const report = ref(null)
 const loading = ref(true)
@@ -24,6 +28,7 @@ async function load() {
   error.value = null
   try {
     report.value = await reportsApi.fetchReport(props.reportId)
+    ui.setBreadcrumbLeaf(report.value.title || report.value.report_type_label)
   } catch (err) {
     error.value = err
   } finally {
@@ -45,18 +50,15 @@ onMounted(load)
 
     <template v-else-if="report">
       <header class="row between gap-3 wrap">
-        <div class="row gap-2 wrap">
-          <AppButton
-            size="sm"
-            variant="ghost"
-            icon="pi pi-arrow-left"
-            label="Reports"
-            :to="{ name: 'project-reports', params: { projectId: report.project } }"
-          />
-          <span class="text-xs text-muted">
+        <div>
+          <div class="row gap-2 wrap">
+            <BackLink :fallback-to="{ name: 'reports' }" fallback-label="Reports" />
+            <h1 class="report__title">{{ report.title || report.report_type_label }}</h1>
+          </div>
+          <p class="text-xs text-muted">
             Version {{ report.version_number }} · generated {{ formatDateTime(report.created_at) }}
             <template v-if="report.generated_by">by {{ report.generated_by }}</template>
-          </span>
+          </p>
         </div>
 
         <div class="row gap-2">
@@ -80,6 +82,11 @@ onMounted(load)
 </template>
 
 <style scoped>
+.report__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
 .report__sheet {
   padding: var(--space-6);
 }

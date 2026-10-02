@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 
 import * as knowledgeApi from '@/api/knowledge'
 import AppButton from '@/components/common/AppButton.vue'
+import BackLink from '@/components/common/BackLink.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
@@ -75,6 +76,7 @@ async function load() {
   error.value = null
   try {
     base.value = await knowledgeApi.fetchKnowledgeBase(props.knowledgeBaseId)
+    ui.setBreadcrumbLeaf(base.value.edition_label)
     await Promise.all([loadClauses(), loadChunks()])
   } catch (err) {
     error.value = err
@@ -178,13 +180,7 @@ onMounted(async () => {
       <header class="row between gap-3 wrap">
         <div>
           <div class="row gap-2 wrap">
-            <AppButton
-              size="sm"
-              variant="ghost"
-              icon="pi pi-arrow-left"
-              label="Knowledge base"
-              :to="{ name: 'knowledge-base' }"
-            />
+            <BackLink :fallback-to="{ name: 'knowledge-base' }" fallback-label="Knowledge base" />
             <h1 class="kbd__title">{{ base.edition_label }}</h1>
             <StatusBadge :status="base.status" />
           </div>

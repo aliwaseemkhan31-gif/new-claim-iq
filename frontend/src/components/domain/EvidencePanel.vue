@@ -9,7 +9,9 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
+import Pager from '@/components/common/Pager.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { useListQuery } from '@/composables/useListQuery'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { EM_DASH, formatRelative } from '@/utils/format'
@@ -48,11 +50,19 @@ const WEIGHTS = [
   ['weak', 'Weak'],
 ]
 
+const PAGE_SIZE = 25
+
+const { relevance: relevanceFilter, page, snapshot } = useListQuery({ relevance: '', page: 1 })
+
 const rows = ref([])
+const total = ref(null)
 const documents = ref([])
 const loading = ref(true)
 const error = ref(null)
-const relevanceFilter = ref('')
+
+const pageCount = computed(() =>
+  total.value == null ? 1 : Math.max(1, Math.ceil(total.value / PAGE_SIZE))
+)
 
 const canManage = computed(() => auth.canInProject(props.projectId, 'evidence.manage'))
 
@@ -64,9 +74,11 @@ async function load() {
       claim: props.claimId || undefined,
       project: props.claimId ? undefined : props.projectId || undefined,
       relevance: relevanceFilter.value || undefined,
-      page_size: 100,
+      page: page.value,
+      page_size: PAGE_SIZE,
     })
     rows.value = rowsOf(data)
+    total.value = Array.isArray(data) ? data.length : (data?.count ?? rows.value.length)
   } catch (err) {
     error.value = err
   } finally {
@@ -74,7 +86,9 @@ async function load() {
   }
 }
 
-watch(relevanceFilter, load)
+// The filter and page live in the URL, so they survive opening a record and
+// coming back.
+watch(snapshot, load)
 watch(() => props.claimId, load)
 
 // -- Adding -----------------------------------------------------------------
@@ -296,6 +310,15 @@ onMounted(load)
           </tbody>
         </table>
       </div>
+
+      <Pager
+        v-if="!loading && !error && rows.length"
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        unit="records"
+        @update:page="page = $event"
+      />
     </div>
 
     <AppDialog

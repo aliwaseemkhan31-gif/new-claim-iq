@@ -30,15 +30,21 @@ const emit = defineEmits(['click'])
 const isDisabled = computed(() => props.disabled || props.loading)
 
 const tag = computed(() => {
+  // A disabled link is rendered as a button. `disabled` means nothing to an
+  // anchor, so the element stayed in the tab order and still navigated —
+  // `aria-disabled` told assistive technology one thing while the element did
+  // another.
+  if (isDisabled.value) return 'button'
   if (props.to) return RouterLink
   if (props.href) return 'a'
   return 'button'
 })
 
 const bindings = computed(() => {
+  if (isDisabled.value) return { type: props.type, disabled: true }
   if (props.to) return { to: props.to }
   if (props.href) return { href: props.href, rel: 'noopener' }
-  return { type: props.type, disabled: isDisabled.value }
+  return { type: props.type, disabled: false }
 })
 
 const iconOnly = computed(() => Boolean(props.icon) && !props.label)

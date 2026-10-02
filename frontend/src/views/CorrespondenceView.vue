@@ -1,18 +1,11 @@
 <script setup>
-import { onMounted, ref } from 'vue'
-
 import CorrespondencePanel from '@/components/domain/CorrespondencePanel.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ProjectPicker from '@/components/domain/ProjectPicker.vue'
-import { useProjectsStore } from '@/stores/projects'
+import { useProjectSelection } from '@/composables/useProjectSelection'
 
-const projects = useProjectsStore()
-const projectId = ref(null)
-
-onMounted(() => {
-  projectId.value = projects.activeProjectId
-})
+const { projectId } = useProjectSelection()
 </script>
 
 <template>

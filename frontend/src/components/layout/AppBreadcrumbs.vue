@@ -4,14 +4,23 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { useProjectsStore } from '@/stores/projects'
+import { useUiStore } from '@/stores/ui'
 
 const route = useRoute()
 const projects = useProjectsStore()
+const ui = useUiStore()
 
 /**
  * Crumbs come from the matched route chain, so adding a route adds its crumb.
- * The project workspace is the one special case: its label is the project
- * name, which is only known once the project has loaded.
+ *
+ * Two things a route cannot say for itself:
+ *
+ *   - its parent. A detail route is a direct child of the shell, so the
+ *     matched chain alone yields `Home › Document` and the register the
+ *     document belongs to never appears. `meta.parent` supplies it.
+ *   - its leaf's name. The route can only offer "Document"; the title belongs
+ *     to a record that loads later. The view puts the real name in the store
+ *     and it replaces the generic label on the last crumb.
  */
 const crumbs = computed(() => {
   const items = [{ label: 'Home', to: { name: 'dashboard' } }]
@@ -20,9 +29,18 @@ const crumbs = computed(() => {
     const meta = record.meta || {}
     if (!meta.title && !meta.breadcrumb) continue
 
-    const isProjectRoot = record.path === '/projects/:projectId'
-    if (isProjectRoot) {
-      items.push({ label: 'Projects', to: { name: 'projects' } })
+    for (const parent of [meta.parent ?? []].flat()) {
+      items.push({
+        label: parent.label,
+        // Params are passed through so a parent on a dynamic path resolves;
+        // vue-router drops the ones its path does not use.
+        to: { name: parent.name, params: route.params },
+      })
+    }
+
+    // The project workspace labels itself with the project's name, which is
+    // only known once the project has loaded.
+    if (record.path === '/projects/:projectId') {
       const name = projects.activeProject?.name
       items.push({
         label: name || `Project ${route.params.projectId}`,
@@ -38,9 +56,20 @@ const crumbs = computed(() => {
     })
   }
 
-  // De-duplicate consecutive repeats (e.g. "Home" then "Dashboard" at root).
+  // Drop a crumb that repeats the one before it — a register that is also
+  // its own declared parent, which would otherwise read "Documents ›
+  // Documents".
   const deduped = items.filter((item, index) => index === 0 || item.label !== items[index - 1].label)
-  return deduped.map((item, index) => ({ ...item, current: index === deduped.length - 1 }))
+
+  const leaf = ui.breadcrumbLeaf
+  return deduped.map((item, index) => {
+    const current = index === deduped.length - 1
+    return {
+      ...item,
+      current,
+      label: current && leaf ? leaf : item.label,
+    }
+  })
 })
 </script>
 
@@ -108,9 +137,13 @@ const crumbs = computed(() => {
   text-overflow: ellipsis;
 }
 
-/* The trail is redundant on narrow screens where the page title is visible. */
+/*
+ * Narrow screens keep the parent as well as the leaf. Trimming to the leaf
+ * alone left nothing in the trail to click, on exactly the widths where the
+ * sidebar is a drawer and there is no other way up.
+ */
 @media (max-width: 780px) {
-  .crumbs__item:not(:last-child) {
+  .crumbs__item:nth-last-child(n + 3) {
     display: none;
   }
 }

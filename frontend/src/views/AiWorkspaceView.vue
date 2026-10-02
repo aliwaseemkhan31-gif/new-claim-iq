@@ -1,21 +1,11 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-
 import AiAskPanel from '@/components/domain/AiAskPanel.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ProjectPicker from '@/components/domain/ProjectPicker.vue'
-import { useProjectsStore } from '@/stores/projects'
-import { rowsOf } from '@/utils/viewer'
+import { useProjectSelection } from '@/composables/useProjectSelection'
 
-const projects = useProjectsStore()
-const projectId = ref(null)
-
-const selected = computed(() => rowsOf(projects.items).find((p) => p.id === projectId.value) ?? null)
-
-onMounted(() => {
-  projectId.value = projects.activeProjectId
-})
+const { projectId, selected } = useProjectSelection()
 </script>
 
 <template>

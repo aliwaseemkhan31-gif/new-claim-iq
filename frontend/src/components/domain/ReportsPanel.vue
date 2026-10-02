@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { useRouter } from 'vue-router'
 
@@ -8,6 +8,8 @@ import AppButton from '@/components/common/AppButton.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
+import Pager from '@/components/common/Pager.vue'
+import { useListQuery } from '@/composables/useListQuery'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { formatDateTime } from '@/utils/format'
@@ -31,10 +33,19 @@ const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
 
+const PAGE_SIZE = 25
+
+const { page, snapshot } = useListQuery({ page: 1 })
+
 const rows = ref([])
+const total = ref(null)
 const loading = ref(true)
 const error = ref(null)
 const generating = ref('')
+
+const pageCount = computed(() =>
+  total.value == null ? 1 : Math.max(1, Math.ceil(total.value / PAGE_SIZE))
+)
 
 const canGenerate = computed(
   () => Boolean(props.projectId) && auth.canInProject(props.projectId, 'report.generate')
@@ -47,9 +58,11 @@ async function load() {
     const data = await reportsApi.listReports({
       project: props.projectId || undefined,
       claim: props.claimId || undefined,
-      page_size: 50,
+      page: page.value,
+      page_size: PAGE_SIZE,
     })
     rows.value = rowsOf(data)
+    total.value = Array.isArray(data) ? data.length : (data?.count ?? rows.value.length)
   } catch (err) {
     error.value = err
   } finally {
@@ -73,6 +86,8 @@ async function generate(reportType) {
     generating.value = ''
   }
 }
+
+watch(snapshot, load)
 
 onMounted(load)
 </script>
@@ -160,6 +175,15 @@ onMounted(load)
           </tbody>
         </table>
       </div>
+
+      <Pager
+        v-if="!loading && !error && rows.length"
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        unit="reports"
+        @update:page="page = $event"
+      />
     </div>
   </div>
 </template>

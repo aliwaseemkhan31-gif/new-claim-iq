@@ -41,7 +41,11 @@ let toastSeq = 0
 export const useUiStore = defineStore('ui', () => {
   const theme = ref(initialTheme())
   const sidebarCollapsed = ref(readStorage(SIDEBAR_KEY) === 'true')
-  const commandPaletteOpen = ref(false)
+  // Separate from `sidebarCollapsed`: that is a remembered desktop
+  // preference, this is a drawer that is open right now and should not
+  // outlive the screen the user opened it on.
+  const mobileNavOpen = ref(false)
+  const breadcrumbLeaf = ref(null)
   const toasts = ref([])
   const timers = new Map()
 
@@ -80,12 +84,29 @@ export const useUiStore = defineStore('ui', () => {
 
   watch(sidebarCollapsed, (value) => writeStorage(SIDEBAR_KEY, String(value)))
 
-  function openCommandPalette() {
-    commandPaletteOpen.value = true
+  function setMobileNavOpen(value) {
+    mobileNavOpen.value = Boolean(value)
   }
 
-  function closeCommandPalette() {
-    commandPaletteOpen.value = false
+  function toggleMobileNav() {
+    mobileNavOpen.value = !mobileNavOpen.value
+  }
+
+  /**
+   * The name of the record the current screen is showing.
+   *
+   * A route can only describe its leaf generically — "Document", "Claim" —
+   * because the title belongs to a record that has not loaded when the route
+   * resolves. A detail view sets this once it knows, and the breadcrumb
+   * reads it. Cleared on every navigation, so a stale name never labels the
+   * next screen.
+   */
+  function setBreadcrumbLeaf(label) {
+    breadcrumbLeaf.value = label || null
+  }
+
+  function clearBreadcrumbLeaf() {
+    breadcrumbLeaf.value = null
   }
 
   /**
@@ -141,14 +162,17 @@ export const useUiStore = defineStore('ui', () => {
     theme,
     isDark,
     sidebarCollapsed,
-    commandPaletteOpen,
+    mobileNavOpen,
+    breadcrumbLeaf,
     toasts,
     setTheme,
     toggleTheme,
     setSidebarCollapsed,
     toggleSidebar,
-    openCommandPalette,
-    closeCommandPalette,
+    setMobileNavOpen,
+    toggleMobileNav,
+    setBreadcrumbLeaf,
+    clearBreadcrumbLeaf,
     notify,
     notifyError,
     notifySuccess,

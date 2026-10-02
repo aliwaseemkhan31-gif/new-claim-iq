@@ -7,6 +7,7 @@ import * as claimsApi from '@/api/claims'
 import * as projectsApi from '@/api/projects'
 import AppButton from '@/components/common/AppButton.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
+import BackLink from '@/components/common/BackLink.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
@@ -183,6 +184,7 @@ async function load() {
   error.value = null
   try {
     claim.value = await claimsApi.fetchClaim(props.claimId)
+    ui.setBreadcrumbLeaf(claim.value.title)
     await auth.loadProjectPermissions(claim.value.project)
     project.value = await projectsApi.fetchProject(claim.value.project)
     try {
@@ -347,13 +349,7 @@ onMounted(load)
     <template v-else-if="claim">
       <header class="claim__header">
         <div class="row gap-2 wrap">
-          <AppButton
-            size="sm"
-            variant="ghost"
-            icon="pi pi-arrow-left"
-            label="Claims"
-            :to="{ name: 'project-claims', params: { projectId: claim.project } }"
-          />
+          <BackLink :fallback-to="{ name: 'claims' }" fallback-label="Claims" />
           <h1 class="claim__title">{{ claim.title }}</h1>
           <StatusBadge :status="claim.status" />
           <StatusBadge :status="claim.human_outcome" size="sm" />
@@ -422,18 +418,20 @@ onMounted(load)
         </div>
       </header>
 
-      <nav class="claim__tabs" aria-label="Claim sections">
+      <div class="claim__tabs" role="tablist" aria-label="Claim sections">
         <button
           v-for="[id, label] in TABS"
           :key="id"
           type="button"
+          role="tab"
           class="claim__tab"
           :class="{ 'is-active': tab === id }"
+          :aria-selected="tab === id"
           @click="setTab(id)"
         >
           {{ label }}
         </button>
-      </nav>
+      </div>
 
       <!-- Screening -->
       <template v-if="tab === 'screening'">

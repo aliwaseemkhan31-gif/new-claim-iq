@@ -11,7 +11,9 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
+import Pager from '@/components/common/Pager.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { useListQuery } from '@/composables/useListQuery'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { EM_DASH, formatCurrency, formatRelative } from '@/utils/format'
@@ -57,13 +59,30 @@ const CLAIM_STATUSES = [
   ['withdrawn', 'Withdrawn'],
 ]
 
-const query = ref('')
-const statusFilter = ref('')
-const typeFilter = ref('')
+const PAGE_SIZE = 25
+
+const {
+  q,
+  status: statusFilter,
+  type: typeFilter,
+  page,
+  snapshot,
+  isFiltered,
+  clear,
+} = useListQuery({ q: '', status: '', type: '', page: 1 })
+
+// Local while it is being typed, settling into the URL once it stops.
+const search = ref(q.value)
+
 const rows = ref([])
+const total = ref(null)
 const parties = ref([])
 const loading = ref(true)
 const error = ref(null)
+
+const pageCount = computed(() =>
+  total.value == null ? 1 : Math.max(1, Math.ceil(total.value / PAGE_SIZE))
+)
 
 const canCreate = computed(
   () => Boolean(props.projectId) && auth.canInProject(props.projectId, 'claim.create')
@@ -75,13 +94,15 @@ async function load() {
   try {
     const data = await claimsApi.listClaims({
       project: props.projectId || undefined,
-      search: query.value || undefined,
+      search: q.value || undefined,
       status: statusFilter.value || undefined,
       claim_type: typeFilter.value || undefined,
-      page_size: 100,
+      page: page.value,
+      page_size: PAGE_SIZE,
       ordering: '-created_at',
     })
     rows.value = rowsOf(data)
+    total.value = Array.isArray(data) ? data.length : (data?.count ?? rows.value.length)
     loadScreening()
   } catch (err) {
     error.value = err
@@ -111,7 +132,7 @@ async function loadScreening() {
   try {
     const data = await claimsApi.fetchScreeningSummary({
       project: props.projectId || undefined,
-      search: query.value || undefined,
+      search: q.value || undefined,
       status: statusFilter.value || undefined,
       claim_type: typeFilter.value || undefined,
     })
@@ -121,11 +142,21 @@ async function loadScreening() {
   }
 }
 
+// Typing settles into the URL; the URL is what triggers a fetch, so Back and
+// Forward restore the register exactly as it was left.
 let debounce = null
-watch([query, statusFilter, typeFilter], () => {
+watch(search, (value) => {
   clearTimeout(debounce)
-  debounce = setTimeout(load, 250)
+  debounce = setTimeout(() => {
+    q.value = value.trim()
+  }, 250)
 })
+
+watch(q, (value) => {
+  if (value !== search.value.trim()) search.value = value
+})
+
+watch(snapshot, load)
 
 function open(claim) {
   router.push({ name: 'claim-detail', params: { claimId: claim.id } })
@@ -306,7 +337,7 @@ onMounted(load)
     <div class="toolbar between">
       <div class="toolbar">
         <input
-          v-model="query"
+          v-model="search"
           class="field-input claims__search"
           type="search"
           placeholder="Filter by title or reference"
@@ -350,10 +381,13 @@ onMounted(load)
       <ErrorState v-else-if="error" :error="error" title="Could not load claims" @retry="load" />
 
       <EmptyState
-        v-else-if="!rows.length && (query || statusFilter || typeFilter)"
+        v-else-if="!rows.length && isFiltered"
         icon="pi pi-filter-slash"
         title="No claims match"
         description="Nothing here matches the current filter."
+        action-label="Clear the filter"
+        action-icon="pi pi-filter-slash"
+        @action="clear"
       />
 
       <EmptyState
@@ -429,6 +463,15 @@ onMounted(load)
           </tbody>
         </table>
       </div>
+
+      <Pager
+        v-if="!loading && !error && rows.length"
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        unit="claims"
+        @update:page="page = $event"
+      />
     </div>
 
     <AppDialog

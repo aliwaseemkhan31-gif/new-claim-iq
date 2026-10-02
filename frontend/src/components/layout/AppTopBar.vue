@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import AppBreadcrumbs from './AppBreadcrumbs.vue'
 import NotificationBell from './NotificationBell.vue'
@@ -9,6 +9,7 @@ import ThemeToggle from './ThemeToggle.vue'
 import UserMenu from './UserMenu.vue'
 import { useUiStore } from '@/stores/ui'
 
+const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 
@@ -17,14 +18,28 @@ const shortcutKey = computed(() =>
 )
 
 function openSearch() {
+  if (route.name === 'search') return
   router.push({ name: 'search' })
 }
 
+/**
+ * True when the keystroke belongs to whatever the user is typing in.
+ *
+ * The shortcut navigates to a different screen, so firing it while someone is
+ * mid-sentence in the AI question box discards what they had written. A
+ * shortcut is not worth a lost paragraph.
+ */
+function isEditingText(target) {
+  if (!target) return false
+  if (target.isContentEditable) return true
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
 function onGlobalKeydown(event) {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-    event.preventDefault()
-    openSearch()
-  }
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return
+  if (isEditingText(event.target)) return
+  event.preventDefault()
+  openSearch()
 }
 
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
@@ -36,8 +51,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
     <button
       type="button"
       class="topbar__icon-button topbar__sidebar-toggle"
-      aria-label="Toggle sidebar"
-      @click="ui.toggleSidebar()"
+      aria-label="Navigation"
+      :aria-expanded="ui.mobileNavOpen"
+      @click="ui.toggleMobileNav()"
     >
       <i class="pi pi-bars" aria-hidden="true" />
     </button>

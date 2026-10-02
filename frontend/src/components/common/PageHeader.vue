@@ -1,5 +1,7 @@
 <script setup>
-defineProps({
+import BackLink from './BackLink.vue'
+
+const props = defineProps({
   title: { type: String, required: true },
   description: { type: String, default: null },
   /** Small label above the title, e.g. the parent entity. */
@@ -7,12 +9,24 @@ defineProps({
   /** Optional count shown beside the title. Pass null while loading. */
   count: { type: [Number, String], default: null },
   sticky: { type: Boolean, default: false },
+  /**
+   * The register this screen sits under. Set it on any screen a user can
+   * arrive at from more than one place, and the header carries a way back —
+   * to wherever they actually came from, falling back to this.
+   */
+  backTo: { type: [String, Object], default: null },
+  backLabel: { type: String, default: null },
 })
+
+const showBack = Boolean(props.backTo && props.backLabel)
 </script>
 
 <template>
   <header class="page-header" :class="{ 'page-header--sticky': sticky }">
     <div class="page-header__main">
+      <div v-if="showBack" class="page-header__back">
+        <BackLink :fallback-to="backTo" :fallback-label="backLabel" />
+      </div>
       <p v-if="eyebrow" class="text-overline">{{ eyebrow }}</p>
       <div class="page-header__title-row">
         <h1 class="page-header__title">{{ title }}</h1>
@@ -47,6 +61,13 @@ defineProps({
 
 .page-header__main {
   min-width: 0;
+}
+
+.page-header__back {
+  margin-bottom: var(--space-1);
+  /* Pulled flush with the title: a ghost button's own padding would
+     otherwise indent the trail relative to everything under it. */
+  margin-left: calc(-1 * var(--space-2));
 }
 
 .page-header__title-row {

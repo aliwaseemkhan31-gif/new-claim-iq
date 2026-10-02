@@ -1,7 +1,8 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import AppButton from './AppButton.vue'
+import { useModal } from '@/composables/useModal'
 
 /**
  * Confirmation for destructive or irreversible actions.
@@ -24,6 +25,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'confirm', 'cancel'])
 
 const typed = ref('')
+const panel = ref(null)
 const inputEl = ref(null)
 const confirmEl = ref(null)
 
@@ -35,14 +37,20 @@ const canConfirm = computed(() => {
 
 watch(
   () => props.modelValue,
-  async (open) => {
-    if (!open) {
-      typed.value = ''
-      return
-    }
-    await nextTick()
-    if (props.confirmPhrase) inputEl.value?.focus()
-    else confirmEl.value?.$el?.focus?.()
+  (open) => {
+    if (!open) typed.value = ''
+  }
+)
+
+const { onKeydown } = useModal(
+  computed(() => props.modelValue),
+  panel,
+  {
+    onRequestClose: () => onCancel(),
+    // On the phrase field when one is required, otherwise on the confirm
+    // button — the dialog asks one question and that is the answer.
+    initialFocus: () =>
+      props.confirmPhrase ? inputEl.value : (confirmEl.value?.$el ?? null),
   }
 )
 
@@ -63,15 +71,15 @@ function onConfirm() {
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="confirm__overlay" @click.self="onCancel">
+    <div v-if="modelValue" class="confirm__overlay" @click.self="onCancel" @keydown="onKeydown">
       <div
+        ref="panel"
         class="confirm"
         role="alertdialog"
         aria-modal="true"
         tabindex="-1"
         :aria-label="title"
         data-testid="confirm-dialog"
-        @keydown.esc="onCancel"
       >
         <header class="confirm__header">
           <div class="confirm__icon" :class="`confirm__icon--${variant}`" aria-hidden="true">

@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const AppLayout = () => import('@/layouts/AppLayout.vue')
 const AuthLayout = () => import('@/layouts/AuthLayout.vue')
@@ -13,6 +14,10 @@ const AuthLayout = () => import('@/layouts/AuthLayout.vue')
  *                   again against that project.
  *   title         — document title and breadcrumb leaf.
  *   breadcrumb    — override for the crumb label (defaults to `title`).
+ *   parent        — a crumb, or an ordered list of crumbs, to insert before
+ *                   this one, as `{ name, label }`. A detail screen is not
+ *                   its own parent: without this the trail ends at the detail
+ *                   route and there is nothing in it to click.
  */
 export const routes = [
   {
@@ -49,7 +54,7 @@ export const routes = [
         path: 'projects/:projectId',
         component: () => import('@/views/ProjectWorkspaceView.vue'),
         props: true,
-        meta: { title: 'Project', breadcrumb: 'Projects', breadcrumbTo: { name: 'projects' } },
+        meta: { title: 'Project', parent: { name: 'projects', label: 'Projects' } },
         children: [
           { path: '', redirect: { name: 'project-overview' } },
           {
@@ -120,7 +125,11 @@ export const routes = [
         name: 'document-viewer',
         component: () => import('@/views/DocumentViewerView.vue'),
         props: true,
-        meta: { title: 'Document', permission: 'document.view', breadcrumb: 'Documents' },
+        meta: {
+          title: 'Document',
+          permission: 'document.view',
+          parent: { name: 'documents', label: 'Documents' },
+        },
       },
       {
         path: 'claims',
@@ -133,7 +142,11 @@ export const routes = [
         name: 'claim-detail',
         component: () => import('@/views/ClaimDetailView.vue'),
         props: true,
-        meta: { title: 'Claim', permission: 'claim.view', breadcrumb: 'Claims' },
+        meta: {
+          title: 'Claim',
+          permission: 'claim.view',
+          parent: { name: 'claims', label: 'Claims' },
+        },
       },
       {
         path: 'correspondence',
@@ -176,7 +189,11 @@ export const routes = [
         name: 'report-detail',
         component: () => import('@/views/ReportDetailView.vue'),
         props: true,
-        meta: { title: 'Report', permission: 'report.view', breadcrumb: 'Reports' },
+        meta: {
+          title: 'Report',
+          permission: 'report.view',
+          parent: { name: 'reports', label: 'Reports' },
+        },
       },
       {
         path: 'knowledge-base',
@@ -189,7 +206,7 @@ export const routes = [
         name: 'knowledge-base-detail',
         component: () => import('@/views/KnowledgeBaseDetailView.vue'),
         props: true,
-        meta: { title: 'Edition', breadcrumb: 'Knowledge Base' },
+        meta: { title: 'Edition', parent: { name: 'knowledge-base', label: 'Knowledge Base' } },
       },
       {
         // Where a citation into standard-form text lands.
@@ -197,7 +214,13 @@ export const routes = [
         name: 'knowledge-base-viewer',
         component: () => import('@/views/KnowledgeBaseViewerView.vue'),
         props: true,
-        meta: { title: 'Standard form', breadcrumb: 'Knowledge Base' },
+        meta: {
+          title: 'Standard form',
+          parent: [
+            { name: 'knowledge-base', label: 'Knowledge Base' },
+            { name: 'knowledge-base-detail', label: 'Edition' },
+          ],
+        },
       },
       {
         path: 'notifications',
@@ -294,7 +317,11 @@ const router = createRouter({
   },
 })
 
-router.beforeEach((to) => resolveNavigation(to, useAuthStore()))
+router.beforeEach((to) => {
+  // The record name belongs to the screen being left, not the one arriving.
+  useUiStore().clearBreadcrumbLeaf()
+  return resolveNavigation(to, useAuthStore())
+})
 
 router.afterEach((to) => {
   const title = to.meta?.title

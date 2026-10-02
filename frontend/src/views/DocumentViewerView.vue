@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import * as documentsApi from '@/api/documents'
 import AppButton from '@/components/common/AppButton.vue'
+import BackLink from '@/components/common/BackLink.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import PageViewer from '@/components/domain/PageViewer.vue'
@@ -57,6 +58,7 @@ async function load() {
   error.value = null
   try {
     document.value = await documentsApi.fetchDocument(props.documentId)
+    ui.setBreadcrumbLeaf(document.value.title)
     const [sectionData, processingData] = await Promise.all([
       documentsApi.fetchDocumentSections(props.documentId).catch(() => ({ clauses: [], tables: [] })),
       documentsApi.fetchDocumentProcessing(props.documentId).catch(() => null),
@@ -100,12 +102,9 @@ onMounted(load)
       <header class="row between gap-3 wrap">
         <div>
           <div class="row gap-2 wrap">
-            <AppButton
-              size="sm"
-              variant="ghost"
-              icon="pi pi-arrow-left"
-              label="Documents"
-              :to="{ name: 'project-documents', params: { projectId: document.project } }"
+            <BackLink
+              :fallback-to="{ name: 'documents' }"
+              fallback-label="Documents"
             />
             <h1 class="viewer-page__title">{{ document.title }}</h1>
           </div>
