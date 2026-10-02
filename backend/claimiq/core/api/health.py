@@ -122,7 +122,12 @@ class SystemStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request) -> Response:
-        ai_settings = settings.AI_SETTINGS
+        from claimiq.ai.services.configuration import resolve_ai_settings
+
+        # The effective configuration, including an administrator's selection.
+        # A status report naming the environment's model while the application
+        # calls another one is worse than no report.
+        ai_settings = resolve_ai_settings()
         return Response(
             {
                 "application": "claimiq-enterprise",
@@ -178,6 +183,8 @@ class VersionView(APIView):
 
         import django
 
+        from claimiq.ai.services.configuration import active_hardware_profile
+
         return Response(
             {
                 "application": "claimiq-enterprise",
@@ -185,6 +192,6 @@ class VersionView(APIView):
                 "api_version": "v1",
                 "django": django.get_version(),
                 "python": platform.python_version(),
-                "hardware_profile": settings.AI_SETTINGS["HARDWARE_PROFILE"],
+                "hardware_profile": active_hardware_profile(),
             }
         )

@@ -246,18 +246,18 @@ class ModelRegistry:
     ) -> ModelAvailability:
         """Compare recommendations against what the runtime reports.
 
-        Matching is by base name, ignoring an Ollama tag suffix, so
-        ``qwen2.5:14b-instruct-q4_K_M`` satisfies ``qwen2.5:14b-instruct``.
-        Quantisation is a deployment choice and should not read as a different
-        model.
+        Matching is by canonical name, so ``qwen2.5:14b-instruct-q4_K_M``
+        satisfies ``qwen2.5:14b-instruct`` and an installed ``bge-m3:latest``
+        satisfies a ``bge-m3`` recommendation. Quantisation and the implicit
+        tag are deployment details and should not read as a different model.
         """
         recommended = self.recommendations_for(role, profile)
-        discovered_names = {_base_name(spec.name) for spec in discovered}
+        discovered_names = {canonical_model_name(spec.name) for spec in discovered}
 
         available: list[ModelSpec] = []
         missing: list[ModelSpec] = []
         for spec in recommended:
-            if _base_name(spec.name) in discovered_names:
+            if canonical_model_name(spec.name) in discovered_names:
                 available.append(spec)
             else:
                 missing.append(spec)
@@ -291,10 +291,12 @@ class ModelRegistry:
                 what was expected and what was found, because "no model
                 configured" without that detail is a frustrating dead end.
         """
-        discovered_by_base = {_base_name(spec.name): spec for spec in discovered}
+        discovered_by_base = {
+            canonical_model_name(spec.name): spec for spec in discovered
+        }
 
         if configured:
-            match = discovered_by_base.get(_base_name(configured))
+            match = discovered_by_base.get(canonical_model_name(configured))
             if match is not None:
                 return match
             raise ModelNotConfiguredError(
@@ -366,6 +368,29 @@ def _base_name(name: str) -> str:
             tag = tag[:index]
             break
     return f"{repo}:{tag}".lower()
+
+
+def canonical_model_name(name: str) -> str:
+    """Normalise an Ollama name so the same model compares equal to itself.
+
+    On top of :func:`_base_name`, this resolves the implicit tag: Ollama treats
+    a bare ``bge-m3`` as ``bge-m3:latest``, and ``/api/tags`` always reports the
+    explicit form. Without this, the registry's ``bge-m3`` recommendation reads
+    as missing on a runtime that has it installed, and selecting it reads as a
+    change of embedding model — which would wrongly tell an administrator that
+    every stored vector had been invalidated.
+    """
+    base = _base_name(name).strip()
+    if not base:
+        return ""
+    return base if ":" in base else f"{base}:latest"
+
+
+def same_model(left: str, right: str) -> bool:
+    """Whether two names refer to the same model, tags and quantisation aside."""
+    if not left or not right:
+        return False
+    return canonical_model_name(left) == canonical_model_name(right)
 
 
 DEFAULT_MODEL_REGISTRY = ModelRegistry()

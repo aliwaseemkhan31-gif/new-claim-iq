@@ -88,18 +88,56 @@ docker compose exec ollama ollama pull bge-m3
 docker compose exec ollama ollama list
 ```
 
-Then select them in the administration interface. Deliberately not a deployment
-constant — the application discovers what the runtime has and offers those.
+Then select them in the administration interface, under **Administration →
+System → Model selection**. Deliberately not a deployment constant — the
+application discovers what the runtime has and offers those.
+
+### Choosing models by measurement
+
+**Detect best models** on that panel measures the installation and recommends a
+model for each job rather than leaving an operator to guess from parameter
+counts. It:
+
+- measures the host (processors, memory, GPU) and, more reliably, reads how
+  much of a loaded model Ollama placed in video memory — the host probe cannot
+  see the GPU when the runtime is a separate container;
+- runs every installed model on a real schema-constrained extraction over
+  contract prose, and times prompt evaluation and generation separately;
+- ranks the same measurements differently per role. Answering is interactive,
+  so throughput weighs heavily. Drafting a claim from a photograph runs once
+  per claim, so quality does. Embedding is gated on vector width before
+  anything else.
+
+Optionally it will download recommended models that are missing, which needs a
+route to the model library — an air-gapped installation must have them
+provisioned instead.
+
+A model that cannot hold a JSON schema is never recommended, however fast it
+is: every citation this system produces depends on schema-constrained output.
+
+The selection is **installation-wide**, stored in the database and applied on
+the next request — no restart, and no rebuild. It governs answering, claim
+analysis, drafting, ingestion and retrieval alike.
+
+Changing the **embedding model** invalidates every vector already stored.
+A model whose width differs from the stored column is refused outright; one of
+the same width is allowed with a warning, and documents must be reprocessed
+before search is correct again.
 
 ### Hardware profile
 
-`HARDWARE_PROFILE` is read at **build time** (it selects the torch wheel) and at
-**runtime** (it filters model recommendations). Changing it requires a rebuild:
+`HARDWARE_PROFILE` has two jobs, and only one of them still needs a rebuild.
+
+At **build time** it selects the torch wheel, and changing that requires a
+rebuild:
 
 ```bash
 HARDWARE_PROFILE=gpu-mid docker compose build backend
 docker compose up -d
 ```
+
+At **runtime** it filters model recommendations, and a detection run now
+measures and stores it, so the environment value is only the starting point.
 
 `cpu` is the default and pulls the CPU-only torch wheel — roughly 2 GB smaller
 than the CUDA build, and correct for a host that has no GPU to use it with.

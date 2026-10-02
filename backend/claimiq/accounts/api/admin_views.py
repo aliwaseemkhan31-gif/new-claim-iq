@@ -297,7 +297,9 @@ class SystemView(APIView):
         )
         from claimiq.ingestion.providers.extraction import DocTROCRProvider, RapidOCRProvider
 
-        ai = settings.AI_SETTINGS
+        from claimiq.ai.services.configuration import resolve_ai_settings
+
+        ai = resolve_ai_settings()
         llm = OllamaLLMProvider(ai["OLLAMA_BASE_URL"], 5)
         reachable = llm.is_available()
         llm_models = [m.name for m in llm.list_models()] if reachable else []

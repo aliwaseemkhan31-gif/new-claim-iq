@@ -30,9 +30,9 @@ def embedding_provider_available() -> bool:
     stage is skipped with its reason recorded: the document is lexically
     searchable, and a later reprocess from EMBED adds vectors.
     """
-    from django.conf import settings
+    from claimiq.ai.services.configuration import resolve_ai_settings
 
-    ai_settings = settings.AI_SETTINGS
+    ai_settings = resolve_ai_settings()
     if not ai_settings.get("DEFAULT_EMBEDDING_MODEL"):
         return False
     from claimiq.ai.providers.ollama import OllamaEmbeddingProvider

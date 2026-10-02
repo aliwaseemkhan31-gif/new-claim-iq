@@ -16,7 +16,6 @@ import logging
 import time
 from typing import TYPE_CHECKING, List, Sequence, Tuple
 
-from django.conf import settings
 
 from claimiq.claims.domain.extraction import ClaimDraft, build_draft
 from claimiq.core.domain.errors import ProcessingError, ValidationError
@@ -146,9 +145,13 @@ def draft_from_upload(uploads: "Sequence[UploadedFile]") -> dict:
             details={"pages_read": len(pages)},
         )
 
-    ai = settings.AI_SETTINGS
+    from claimiq.ai.services.configuration import resolve_ai_settings
+
+    ai = resolve_ai_settings()
     # Drafting may use a heavier model than interactive answering: it runs once
-    # per claim, and a field read wrongly here is retyped by hand anyway.
+    # per claim, and a field read wrongly here is retyped by hand anyway. The
+    # resolver already falls back to the answering model when no drafting model
+    # is chosen.
     model = ai.get("DRAFTING_LLM_MODEL") or ai.get("DEFAULT_LLM_MODEL") or ""
     if not model:
         raise ProcessingError(

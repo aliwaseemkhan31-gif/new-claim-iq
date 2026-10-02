@@ -293,12 +293,11 @@ class ModelStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request) -> Response:
-        from django.conf import settings
-
         from claimiq.ai.domain.model_registry import DEFAULT_MODEL_REGISTRY
         from claimiq.ai.providers.ollama import OllamaEmbeddingProvider, OllamaLLMProvider
+        from claimiq.ai.services.configuration import resolve_ai_settings
 
-        ai_settings = settings.AI_SETTINGS
+        ai_settings = resolve_ai_settings()
         profile = ai_settings["HARDWARE_PROFILE"]
         base_url = ai_settings["OLLAMA_BASE_URL"]
 

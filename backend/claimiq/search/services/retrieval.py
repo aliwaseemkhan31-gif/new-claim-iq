@@ -346,7 +346,9 @@ def build_default_service() -> RetrievalService:
     Resolves providers at call time rather than import time, so an
     administrator changing the model does not require a restart.
     """
-    ai_settings = settings.AI_SETTINGS
+    from claimiq.ai.services.configuration import resolve_ai_settings
+
+    ai_settings = resolve_ai_settings()
     embedding_model = ai_settings.get("DEFAULT_EMBEDDING_MODEL") or ""
 
     provider = None

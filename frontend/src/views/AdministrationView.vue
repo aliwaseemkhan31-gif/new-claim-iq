@@ -9,6 +9,7 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import FormField from '@/components/common/FormField.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import ModelDetectionPanel from '@/components/domain/ModelDetectionPanel.vue'
 import { useUiStore } from '@/stores/ui'
 import { EM_DASH, formatDateTime, formatRelative } from '@/utils/format'
 import { rowsOf } from '@/utils/viewer'
@@ -317,6 +318,9 @@ onMounted(load)
           </p>
         </section>
       </div>
+
+      <!-- Loads and polls on its own: a detection outlives this tab's load(). -->
+      <ModelDetectionPanel />
     </template>
 
     <!-- Jobs -->

@@ -11,6 +11,12 @@ from claimiq.accounts.api.admin_views import (
     UserDetailView,
     UsersView,
 )
+from claimiq.ai.api.admin_views import (
+    DetectionCancelView,
+    DetectionDetailView,
+    DetectionView,
+    ModelAdministrationView,
+)
 
 app_name = "admin-api"
 
@@ -21,4 +27,14 @@ urlpatterns = [
     path("users/<str:user_id>/reset-password/", ResetPasswordView.as_view(), name="reset-password"),
     path("system/", SystemView.as_view(), name="system"),
     path("jobs/", JobsView.as_view(), name="jobs"),
+    # Model selection lives in the ai app; mounted here because it is an
+    # operator's decision and the SPA reads it from /api/v1/admin/.
+    path("ai/models/", ModelAdministrationView.as_view(), name="ai-models"),
+    path("ai/detect/", DetectionView.as_view(), name="ai-detect"),
+    path("ai/detect/<uuid:pk>/", DetectionDetailView.as_view(), name="ai-detect-detail"),
+    path(
+        "ai/detect/<uuid:pk>/cancel/",
+        DetectionCancelView.as_view(),
+        name="ai-detect-cancel",
+    ),
 ]

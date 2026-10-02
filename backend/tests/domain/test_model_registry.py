@@ -242,3 +242,63 @@ def test_custom_registry_can_replace_the_catalogue() -> None:
     )
     chosen = registry.select("llm", HardwareProfile.CPU, [spec("bespoke:1b")])
     assert chosen.name == "bespoke:1b"
+
+
+# ---------------------------------------------------------------------------
+# The implicit tag
+# ---------------------------------------------------------------------------
+#
+# Ollama treats a bare `bge-m3` as `bge-m3:latest` and `/api/tags` always
+# reports the explicit form. Observed against a real runtime: the registry's
+# `bge-m3` recommendation read as missing on a machine that had it installed,
+# and selecting it read as a change of embedding model — which would have told
+# an administrator, wrongly, that every stored vector had been invalidated.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("bge-m3", "bge-m3:latest"),
+        ("bge-m3:latest", "bge-m3:latest"),
+        ("qwen2.5:14b-instruct-q4_K_M", "qwen2.5:14b-instruct"),
+        ("QWEN2.5:7B-Instruct", "qwen2.5:7b-instruct"),
+        ("", ""),
+    ],
+)
+def test_canonical_name_resolves_the_implicit_tag(raw: str, expected: str) -> None:
+    from claimiq.ai.domain.model_registry import canonical_model_name
+
+    assert canonical_model_name(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ("bge-m3", "bge-m3:latest", True),
+        ("qwen2.5:7b-instruct", "qwen2.5:7b-instruct-q4_K_M", True),
+        ("qwen2.5:7b-instruct", "qwen2.5:3b-instruct", False),
+        ("bge-m3", "", False),
+    ],
+)
+def test_same_model_ignores_tag_and_quantisation(left, right, expected) -> None:
+    from claimiq.ai.domain.model_registry import same_model
+
+    assert same_model(left, right) is expected
+
+
+def test_an_installed_latest_tag_satisfies_a_bare_recommendation() -> None:
+    availability = DEFAULT_MODEL_REGISTRY.reconcile(
+        "embedding", HardwareProfile.CPU, [spec("bge-m3:latest")]
+    )
+    assert "bge-m3" in [s.name for s in availability.available]
+    assert "bge-m3" not in [s.name for s in availability.missing]
+
+
+def test_a_bare_configured_name_selects_the_installed_latest_tag() -> None:
+    selected = DEFAULT_MODEL_REGISTRY.select(
+        "embedding",
+        HardwareProfile.CPU,
+        [spec("bge-m3:latest")],
+        configured="bge-m3",
+    )
+    assert selected.name == "bge-m3:latest"

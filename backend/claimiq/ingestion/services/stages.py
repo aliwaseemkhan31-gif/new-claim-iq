@@ -589,13 +589,20 @@ def run_embed(ctx: StageContext) -> dict[str, Any]:
             inexplicably poor retrieval.
     """
     from claimiq.ai.providers.ollama import OllamaEmbeddingProvider
+    from claimiq.ai.services.configuration import resolve_ai_settings
 
-    ai_settings = settings.AI_SETTINGS
+    ai_settings = resolve_ai_settings()
     model = ai_settings.get("DEFAULT_EMBEDDING_MODEL") or ""
     if not model:
         raise ProcessingError(
             "No embedding model is configured.",
-            details={"stage": Stage.EMBED.value, "remedy": "Set DEFAULT_EMBEDDING_MODEL."},
+            details={
+                "stage": Stage.EMBED.value,
+                "remedy": (
+                    "Choose an embedding model in Administration, or set "
+                    "DEFAULT_EMBEDDING_MODEL."
+                ),
+            },
         )
     expected = int(ai_settings["EMBEDDING_DIMENSIONS"])
     provider = OllamaEmbeddingProvider(

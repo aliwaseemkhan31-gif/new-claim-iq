@@ -113,6 +113,94 @@ class OllamaClient:
         models = payload.get("models")
         return models if isinstance(models, list) else []
 
+    def version(self) -> str:
+        try:
+            return str(self.get("/api/version").get("version") or "")
+        except ProviderUnavailableError:
+            return ""
+
+    def show(self, model: str) -> dict[str, Any]:
+        """Model metadata: parameter size, quantisation, context length.
+
+        ``/api/tags`` reports family and parameter size; ``/api/show`` adds the
+        trained context length, which decides whether a model can hold eight
+        retrieved passages and the grounding instructions at once. Returns an
+        empty mapping rather than raising — metadata is nice to have, and a
+        model that cannot be described can still be measured.
+        """
+        try:
+            return self.post("/api/show", {"model": model})
+        except (ProviderUnavailableError, ModelNotConfiguredError):
+            return {}
+
+    def running(self) -> list[dict[str, Any]]:
+        """Models currently loaded, from ``/api/ps``.
+
+        The entries carry ``size`` and ``size_vram``, whose ratio is the only
+        trustworthy answer to "did this model actually fit on the GPU". The
+        host probe cannot answer it: in the Docker deployment Django sees no
+        GPU even when Ollama has one.
+        """
+        try:
+            payload = self.get("/api/ps")
+        except ProviderUnavailableError:
+            return []
+        models = payload.get("models")
+        return models if isinstance(models, list) else []
+
+    def pull(self, model: str, on_progress=None) -> None:
+        """Download ``model`` into the runtime, reporting progress.
+
+        ``on_progress(status, completed_bytes, total_bytes)`` is called as each
+        NDJSON line arrives. A pull is minutes to tens of minutes on a slow
+        link, so the read timeout is removed while the connect timeout stays
+        short — a wedged download must not look like an unreachable runtime.
+
+        Raises:
+            ProviderUnavailableError: the runtime is unreachable, or the pull
+                failed. An air-gapped installation has no route to the model
+                library, and the error says so rather than reporting a timeout.
+        """
+        import json as _json
+
+        timeout = httpx.Timeout(None, connect=15.0)
+        try:
+            with httpx.Client(base_url=self.base_url, timeout=timeout) as client:
+                with client.stream(
+                    "POST", "/api/pull", json={"model": model, "stream": True}
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            event = _json.loads(line)
+                        except ValueError:
+                            continue
+                        if error := event.get("error"):
+                            raise ProviderUnavailableError(
+                                f"The model runtime could not download {model!r}.",
+                                details={"model": model, "reason": str(error)},
+                            )
+                        if on_progress is not None:
+                            on_progress(
+                                str(event.get("status") or ""),
+                                int(event.get("completed") or 0),
+                                int(event.get("total") or 0),
+                            )
+        except httpx.HTTPStatusError as exc:
+            raise ProviderUnavailableError(
+                f"The model runtime refused to download {model!r}.",
+                details={"model": model, "status": exc.response.status_code},
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailableError(
+                f"The download of {model!r} could not be completed. An "
+                f"installation with no route to the model library must have "
+                f"models provisioned onto it instead.",
+                details={"model": model, "reason": type(exc).__name__},
+            ) from exc
+
 
 def _spec_from_tag(tag: Mapping[str, Any]) -> ModelSpec:
     """Build a ModelSpec from an Ollama /api/tags entry.
@@ -141,6 +229,23 @@ def _spec_from_tag(tag: Mapping[str, Any]) -> ModelSpec:
         capabilities=frozenset(capabilities),
         notes=f"Discovered in the local runtime. {family} {parameter_size}".strip(),
     )
+
+
+def is_embedding_model(name: str, details: Mapping[str, Any] | None = None) -> bool:
+    """Whether a model embeds rather than generates.
+
+    Newer Ollama reports ``capabilities`` from ``/api/show``; the name and
+    family heuristic is the fallback. Shared rather than duplicated so the
+    benchmark, the administration interface and the selection gate never
+    disagree about what a given model is — a disagreement would show up as an
+    embedding model offered as the answering model, which generates nothing.
+    """
+    details = details or {}
+    capabilities = details.get("capabilities") or ()
+    if any(str(c).lower() == "embedding" for c in capabilities):
+        return True
+    spec = _spec_from_tag({"name": name, "details": {"family": details.get("family", "")}})
+    return ModelCapability.EMBEDDING in spec.capabilities
 
 
 class OllamaLLMProvider(LLMProvider):
@@ -255,6 +360,14 @@ class OllamaLLMProvider(LLMProvider):
             raw_metadata={
                 "total_duration_ns": response.get("total_duration"),
                 "load_duration_ns": response.get("load_duration"),
+                # Prompt evaluation and generation are separately timed, and
+                # the distinction matters: on this application's prompts —
+                # thousands of tokens of retrieved passages against a few
+                # hundred of answer — prompt evaluation is the larger cost,
+                # and a single blended rate would misrepresent how a model
+                # behaves on real work.
+                "prompt_eval_duration_ns": response.get("prompt_eval_duration"),
+                "eval_duration_ns": response.get("eval_duration"),
             },
         )
 

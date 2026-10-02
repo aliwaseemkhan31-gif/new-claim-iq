@@ -358,11 +358,12 @@ class AnsweringService:
 
 def build_default_answering_service() -> AnsweringService:
     """Construct the service from current configuration."""
-    from django.conf import settings
-
+    from claimiq.ai.services.configuration import resolve_ai_settings
     from claimiq.search.services.retrieval import build_default_service
 
-    ai_settings = settings.AI_SETTINGS
+    # Resolved rather than read from settings, so an administrator's choice in
+    # Administration takes effect on the next question without a restart.
+    ai_settings = resolve_ai_settings()
     llm_model = ai_settings.get("DEFAULT_LLM_MODEL") or ""
 
     provider = None

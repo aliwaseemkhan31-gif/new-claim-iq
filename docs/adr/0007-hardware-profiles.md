@@ -82,3 +82,47 @@ model notes rather than hidden, so an operator on `cpu` knows what they have.
 **Accepted limit.**
 VRAM figures are estimates for common quantisations. They inform a warning; they
 are not a scheduler and must not be treated as one.
+
+## Amendment — 2 October 2026: measured profiles and model detection
+
+The negative consequence above — *"the profile must be set correctly, and
+getting it wrong produces poor performance rather than a clear error"* — turned
+out to be the one that bit. `HARDWARE_PROFILE` was a hand-set string, so in
+practice it stayed at `cpu`, and installations with a GPU ran the model the
+installer happened to pick. The same was true of the model names: changing one
+meant editing an environment variable and restarting, so nobody changed one.
+
+**Administration → System → Model selection** now measures rather than assumes,
+and stores the result in `ai_model_configuration` — resolved at call time by
+`claimiq.ai.services.configuration.resolve_ai_settings`, which every service
+that needs a model name goes through. A blank column falls back to the
+environment, so an installation that never uses the feature behaves exactly as
+before.
+
+**This does not reverse the rejection of "auto-detecting hardware and choosing
+silently" above.** The objection was to silence, not to measurement. The run is
+started by an operator, shows every measurement it took and the reasoning for
+each suggestion, and changes nothing until they apply it. Rule 3 above holds:
+recommendations are filtered, not enforced, and an operator may still select a
+model outside the profile.
+
+Three things the measurement taught us, each now encoded:
+
+1. **The host probe is the weaker evidence.** Where Ollama runs in its own
+   container, Django sees no GPU at all. What a loaded model occupies, from
+   `/api/ps`, describes the right machine. But occupied VRAM is a **floor**, not
+   a capacity: taking it as capacity classified a GPU host down to `cpu` on the
+   strength of having run a small model.
+2. **Throughput must be measured on the real task.** Tokens per second on
+   open prose says nothing about whether a model can hold a JSON schema, and
+   grounding depends on that (ADR 0005). A model that fails the schema is never
+   recommended, however fast.
+3. **One ranking is not enough.** Answering is interactive and drafting is not,
+   so the same measurements rank differently per role. On the development
+   machine — a 4 GB laptop GPU, below the `gpu-entry` floor — the 3B answers in
+   12 s and the 7B takes 2.1 min at 42% GPU residency. The first is the right
+   answering model and the second is the right drafting model, and no single
+   score expresses that.
+
+The build-time half of `HARDWARE_PROFILE` is unchanged: it still selects the
+torch wheel and still requires a rebuild.

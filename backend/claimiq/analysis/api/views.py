@@ -14,7 +14,6 @@ from collections import defaultdict
 from typing import Any
 from uuid import UUID
 
-from django.conf import settings
 from django.db import transaction
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -274,7 +273,12 @@ class AnalysisViewSet(viewsets.ViewSet):
             )
 
         project_context = self._require(request, claim.project_id, AI_ANALYSE.code)
-        ai_settings = settings.AI_SETTINGS
+
+        from claimiq.ai.services.configuration import resolve_ai_settings
+
+        # Resolved, not read from settings: the run records which models it
+        # used, and that record must name what the engine will actually call.
+        ai_settings = resolve_ai_settings()
 
         analysis, created = start_analysis(
             claim,
