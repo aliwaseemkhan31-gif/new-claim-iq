@@ -26,7 +26,27 @@ class AIQuestionStatus(models.TextChoices):
 
 class AIQuestion(BaseModel):
     project = models.ForeignKey(
-        "projects.Project", on_delete=models.CASCADE, related_name="ai_questions"
+        "projects.Project",
+        on_delete=models.CASCADE,
+        related_name="ai_questions",
+        null=True,
+        blank=True,
+        help_text=(
+            "The project the question was asked about. Null for a question put "
+            "to a standard form alone, which belongs to no project — see "
+            "`edition_code` for what it was asked against."
+        ),
+    )
+    organization = models.ForeignKey(
+        "accounts.Organization",
+        on_delete=models.CASCADE,
+        related_name="ai_questions",
+        null=True,
+        help_text=(
+            "Tenant the question belongs to. Carried on the row rather than "
+            "read through the project, because a standard-form question has no "
+            "project and must still be confined to one organization."
+        ),
     )
     asked_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+"
@@ -50,7 +70,13 @@ class AIQuestion(BaseModel):
     class Meta:
         db_table = "ai_question"
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["project", "-created_at"])]
+        indexes = [
+            models.Index(fields=["project", "-created_at"]),
+            # Standard-form questions have no project, so the index above does
+            # not serve their history. They are scoped by edition instead.
+            models.Index(fields=["edition_code", "-created_at"]),
+            models.Index(fields=["organization", "-created_at"]),
+        ]
 
     def __str__(self) -> str:
         return self.question[:80]

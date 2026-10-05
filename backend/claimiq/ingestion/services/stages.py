@@ -536,7 +536,12 @@ def run_chunk(ctx: StageContext) -> dict[str, Any]:
 
     headings = _stored_headings(ctx)
 
-    chunks = chunking_domain.chunk_document(pages, headings)
+    # The chunker takes the heading hierarchy as well as the headings. Called
+    # without it, every chunk's ancestor path came out empty — the clause
+    # context the embedding is supposed to carry was simply never passed in.
+    heading_titles = clause_domain.heading_paths(clause_domain.build_hierarchy(headings))
+
+    chunks = chunking_domain.chunk_document(pages, headings, heading_titles=heading_titles)
 
     DocumentChunk.objects.filter(version=version).delete()
 
@@ -558,6 +563,10 @@ def run_chunk(ctx: StageContext) -> dict[str, Any]:
             heading_path=list(chunk.heading_path),
             start_page=chunk.primary_page,
             end_page=chunk.page_numbers[-1] if chunk.page_numbers else chunk.primary_page,
+            # The row holds one offset pair, and a chunk may cross a page
+            # break, so these are the range on `start_page` only — not a range
+            # running from start_page to end_page. A highlighter wanting every
+            # page must re-derive them; `chunk.spans` carries one per page.
             start_offset=chunk.spans[0].start_offset if chunk.spans else 0,
             end_offset=chunk.spans[0].end_offset if chunk.spans else 0,
             is_complete_clause=chunk.is_complete_clause,

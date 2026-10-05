@@ -22,7 +22,7 @@ review.
 ## Current state
 
 ```
-321 passed in 0.39s
+944 passed in 1.35s        # as of October 2026
 ```
 
 Breakdown:

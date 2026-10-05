@@ -87,6 +87,58 @@ def _set_status(kb: KnowledgeBase, status: str, *, actor=None, **fields: Any) ->
 # ---------------------------------------------------------------------------
 
 
+def _refuse_same_file_under_another_edition(
+    organization_id, checksum: str, *, exclude_kb_id=None
+) -> None:
+    """Stop one file being registered as two different editions.
+
+    The guard above already prevents a second knowledge base for the *same*
+    edition. It cannot see the opposite mistake: the same PDF uploaded again
+    under a different edition code — the 1999 Silver Book filed as the 2017
+    one, say. That is how an installation ends up holding the Silver Book three
+    times, and it is worse than clutter. Retrieval is edition-scoped precisely
+    so a 2017 question is never answered from 1999 text (ADR 0004); a file
+    registered under the wrong edition defeats that silently, and every answer
+    it grounds is confidently wrong.
+
+    Checked by checksum, because the file is the only thing that tells us the
+    two entries are the same document.
+    """
+    if not checksum:
+        return
+    query = KnowledgeBase.objects.filter(
+        organization_id=organization_id, source_checksum=checksum
+    )
+    if exclude_kb_id is not None:
+        query = query.exclude(pk=exclude_kb_id)
+    existing = query.first()
+    if existing is None:
+        return
+
+    label = (
+        DEFAULT_REGISTRY.get_edition(existing.edition_code).label
+        if DEFAULT_REGISTRY.has_edition(existing.edition_code)
+        else existing.edition_code
+    )
+    raise ConflictError(
+        f"This exact file is already published as {label}. One file cannot be "
+        f"two editions, and answers are grounded in whichever edition a "
+        f"project declares — so a file filed under the wrong one produces "
+        f"confident answers from the wrong contract.",
+        details={
+            "reason": "duplicate_source_under_another_edition",
+            "knowledge_base_id": str(existing.pk),
+            "edition_code": existing.edition_code,
+            "edition_label": label,
+            "name": existing.name,
+            "remedy": (
+                "Check which edition this file really is. To correct an "
+                "existing entry, replace its source rather than adding another."
+            ),
+        },
+    )
+
+
 def _store_source(*, organization_id, upload, user, title: str, document: Document | None = None):
     """Validate and store the source file as a reference document version."""
     header = upload.read(8192)
@@ -174,6 +226,7 @@ def create_knowledge_base(
     document, version, checksum = _store_source(
         organization_id=organization_id, upload=upload, user=user, title=title
     )
+    _refuse_same_file_under_another_edition(organization_id, checksum)
     kb = KnowledgeBase.objects.create(
         organization_id=organization_id,
         name=title,
@@ -208,6 +261,9 @@ def replace_source(kb: KnowledgeBase, *, user, upload) -> KnowledgeBase:
         user=user,
         title=kb.name,
         document=kb.source_document,
+    )
+    _refuse_same_file_under_another_edition(
+        kb.organization_id, checksum, exclude_kb_id=kb.pk
     )
     KnowledgeBaseChunk.objects.filter(knowledge_base=kb).delete()
     _set_status(

@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from claimiq.accounts.domain.permissions import AI_QUERY
+from claimiq.accounts.services.access import holds_in_any_project
 from claimiq.ai.domain.citations import resolve_ref
 from claimiq.ai.models import AIQuestion, AIQuestionStatus
 from claimiq.ai.services.answering import AnswerRecord, build_default_answering_service
@@ -22,22 +23,46 @@ from claimiq.core.domain.errors import (
 from claimiq.core.logging import get_logger
 from claimiq.knowledge.domain.editions import DEFAULT_REGISTRY
 from claimiq.projects.models import Project
-from claimiq.search.domain.scope import combined_scope, project_scope
+from claimiq.knowledge.models import KnowledgeBase, KnowledgeBaseStatus
+from claimiq.search.domain.scope import combined_scope, knowledge_base_scope, project_scope
 
 logger = get_logger("ai.api")
 
 
 class AskSerializer(serializers.Serializer):
     question = serializers.CharField(min_length=3, max_length=4000)
-    project = serializers.UUIDField()
+    project = serializers.UUIDField(required=False, allow_null=True)
+    #: Which standard form to read, when the question names no project. Never
+    #: defaulted — ADR 0004 — so a question is always answered from the edition
+    #: the asker chose.
+    edition = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     include_knowledge_base = serializers.BooleanField(default=True)
     document_types = serializers.ListField(
         child=serializers.CharField(), required=False, allow_empty=True
     )
 
+    def validate(self, attrs: dict) -> dict:
+        if not attrs.get("project") and not attrs.get("edition"):
+            raise serializers.ValidationError(
+                {
+                    "project": (
+                        "Name either a project to ask about, or the standard-form "
+                        "edition to ask about on its own."
+                    )
+                }
+            )
+        return attrs
+
 
 class AskView(APIView):
-    """Answer a question about a project, grounded in its documents.
+    """Answer a question, grounded in a project's documents or in a standard form.
+
+    Two shapes of question, deliberately the same endpoint. *About a project*
+    reads that project's documents, optionally alongside the form that governs
+    it. *About a standard form alone* reads only the published edition named —
+    what the Red Book requires, independent of any job. The second has no
+    project, so it is confined to the organization by the row's own tenant
+    column rather than through a project.
 
     Long-running: generation on CPU can take minutes. Kept synchronous for now
     because the frontend shows a spinner and a job round-trip would add
@@ -53,24 +78,34 @@ class AskView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        project_id = data["project"]
+        project_id = data.get("project")
         context = access_for(request, project_id)
         if context is None or context.organization_id is None:
             raise PermissionDeniedError("You are not a member of an active organization.")
-        context.require(AI_QUERY.code)
 
-        project = Project.objects.filter(
-            pk=project_id, organization_id=context.organization_id
-        ).first()
-        if project is None or project.pk not in context.accessible_project_ids:
-            raise NotFoundError("The requested project does not exist.")
+        if project_id:
+            context.require(AI_QUERY.code)
+            project = Project.objects.filter(
+                pk=project_id, organization_id=context.organization_id
+            ).first()
+            if project is None or project.pk not in context.accessible_project_ids:
+                raise NotFoundError("The requested project does not exist.")
+            scope = self._build_scope(project, context, data)
+            include_knowledge_base = data["include_knowledge_base"]
+        else:
+            project = None
+            self._require_ai_anywhere(request, context)
+            scope = self._standard_form_scope(context, data)
+            # A question with no project reads nothing but the standard form,
+            # whatever the caller sent for this flag.
+            include_knowledge_base = True
 
-        scope = self._build_scope(project, context, data)
         common = {
             "project": project,
+            "organization_id": context.organization_id,
             "asked_by": request.user,
             "question": data["question"],
-            "include_knowledge_base": data["include_knowledge_base"],
+            "include_knowledge_base": include_knowledge_base,
             "edition_code": scope.knowledge_base_edition or "",
             "created_by": request.user,
         }
@@ -102,12 +137,75 @@ class AskView(APIView):
             {
                 "id": str(question.pk),
                 "question": question.question,
+                "project": str(question.project_id) if question.project_id else None,
+                "edition_code": question.edition_code or None,
                 "created_at": question.created_at.isoformat(),
                 **payload,
                 "trace": record.as_observability_record()
                 if context.has("org.ai.observe")
                 else None,
             }
+        )
+
+    def _require_ai_anywhere(self, request: Request, context) -> None:
+        """Gate a question that names no project.
+
+        `ai.query` is a project permission, and there is no project here to
+        check it against. Someone who may put questions to the model on any of
+        their projects may put one to a standard form; someone who may not,
+        may not — the capability is the same and so is the cost of exercising
+        it.
+        """
+        if holds_in_any_project(
+            request.user,
+            organization_id=context.organization_id,
+            organization_role=context.organization_role,
+            permission=AI_QUERY.code,
+        ):
+            return
+        raise PermissionDeniedError(
+            "You do not have permission to put questions to the AI.",
+            details={"required_permission": AI_QUERY.code},
+        )
+
+    def _standard_form_scope(self, context, data: dict):
+        """Build a scope that reads one published standard form and nothing else.
+
+        The edition is validated against the registry and against what this
+        organization has actually published. Retrieval over an edition with no
+        published knowledge base returns nothing, which reads to a user as the
+        model knowing nothing about the Red Book; the refusal says what is
+        missing instead.
+        """
+        edition = (data.get("edition") or "").strip()
+        available = list(
+            KnowledgeBase.objects.filter(
+                organization_id=context.organization_id,
+                status=KnowledgeBaseStatus.PUBLISHED,
+            ).values_list("edition_code", flat=True)
+        )
+
+        if not DEFAULT_REGISTRY.has_edition(edition):
+            raise ValidationError(
+                "That is not an edition this system knows.",
+                details={
+                    "edition": edition,
+                    "available_editions": [e.code for e in DEFAULT_REGISTRY.editions()],
+                },
+            )
+
+        if edition not in available:
+            raise ValidationError(
+                "No published knowledge base holds that edition, so there is "
+                "nothing to read. Upload and publish the standard form first, "
+                "or choose an edition that is published.",
+                details={"edition": edition, "published_editions": sorted(available)},
+            )
+
+        return knowledge_base_scope(
+            organization_id=context.organization_id,
+            edition=edition,
+            accessible_project_ids=context.accessible_project_ids,
         )
 
     def _build_scope(self, project: Project, context, data: dict):
@@ -226,18 +324,44 @@ def _question_project(request: Request, project_id):
 
 
 class QuestionListView(APIView):
-    """Questions asked about one project, newest first."""
+    """Earlier questions, newest first.
+
+    Scoped either to one project or to one standard-form edition. One of the
+    two is required: an unscoped list would mix a project's confidential
+    questions into a reading of the Red Book.
+    """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request) -> Response:
         project_id = request.query_params.get("project")
-        if not project_id:
-            raise ValidationError("A 'project' is required.", details={"field": "project"})
-        context = _question_project(request, project_id)
-        queryset = AIQuestion.objects.filter(
-            project_id=project_id, project__organization_id=context.organization_id
-        ).select_related("asked_by")
+        edition = (request.query_params.get("edition") or "").strip()
+
+        if project_id:
+            context = _question_project(request, project_id)
+            queryset = AIQuestion.objects.filter(
+                project_id=project_id, project__organization_id=context.organization_id
+            )
+        elif edition:
+            context = access_for(request)
+            if context is None or context.organization_id is None:
+                raise PermissionDeniedError(
+                    "You are not a member of an active organization."
+                )
+            # Standard-form questions only: a project question that happened to
+            # read the same edition belongs to its project's history, not here.
+            queryset = AIQuestion.objects.filter(
+                project__isnull=True,
+                edition_code=edition,
+                organization_id=context.organization_id,
+            )
+        else:
+            raise ValidationError(
+                "A 'project' or an 'edition' is required.",
+                details={"field": "project"},
+            )
+
+        queryset = queryset.select_related("asked_by")
         paginator = StandardPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(
@@ -246,6 +370,7 @@ class QuestionListView(APIView):
                     "id": str(q.pk),
                     "question": q.question,
                     "status": q.status,
+                    "edition_code": q.edition_code or None,
                     "asked_by": q.asked_by.email if q.asked_by_id else None,
                     "created_at": q.created_at.isoformat(),
                     "summary": (q.response.get("answer") or {}).get("summary"),
@@ -267,13 +392,26 @@ class QuestionDetailView(APIView):
         question = AIQuestion.objects.select_related("asked_by", "project").filter(pk=pk).first()
         if question is None:
             raise NotFoundError("The requested question does not exist.")
-        context = _question_project(request, question.project_id)
-        if question.project.organization_id != context.organization_id:
-            raise NotFoundError("The requested question does not exist.")
+
+        if question.project_id:
+            context = _question_project(request, question.project_id)
+            if question.project.organization_id != context.organization_id:
+                raise NotFoundError("The requested question does not exist.")
+        else:
+            # No project to check against, so the row's own tenant column is
+            # the boundary. Reading a standard form is open to members.
+            context = access_for(request)
+            if (
+                context is None
+                or context.organization_id is None
+                or question.organization_id != context.organization_id
+            ):
+                raise NotFoundError("The requested question does not exist.")
+
         return Response(
             {
                 "id": str(question.pk),
-                "project": str(question.project_id),
+                "project": str(question.project_id) if question.project_id else None,
                 "question": question.question,
                 "status": question.status,
                 "asked_by": question.asked_by.email if question.asked_by_id else None,

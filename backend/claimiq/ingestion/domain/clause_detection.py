@@ -95,6 +95,30 @@ _UNIT_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: Units of measure and currency markers seen in bills of quantities, rate
+#: schedules and measurement sheets. Deliberately short: the numbers carry the
+#: signal, and this only corroborates them.
+_TABLE_UNIT_WORDS = frozenset(
+    {
+        "cum", "cuml", "sqm", "sm", "mtr", "rmt", "nos", "no", "each", "ltr",
+        "kg", "tonne", "tons", "ton", "mt", "lm", "ha", "pcs", "set", "sets",
+        "rs", "pkr", "usd", "lump", "ls",
+    }
+)
+
+#: A token that is a quantity rather than a word: ``647.72``, ``1,685,808``,
+#: ``010+500`` (a chainage), ``38220.46``, ``91.484``.
+_NUMERIC_CHARS = set("0123456789,.+-/:")
+
+#: Two quantities in a heading title is already two more than a clause heading
+#: carries. "20.2 Claims for Payment and/or EOT" has none; "2 AggregateBase Cum
+#: 647.72 2602.7 1,685,808" has three.
+_TABLE_ROW_MIN_NUMBERS = 2
+
+#: …or a title that is substantially made of quantities, which catches a short
+#: row like "7 Mudflow 047+135 50.00".
+_TABLE_ROW_NUMERIC_RATIO = 0.34
+
 #: Tokens that mark a line as front/back matter rather than conditions text.
 _NON_CONTENT_MARKERS = (
     "table of contents",
@@ -274,6 +298,81 @@ def is_contents_line(line: str) -> bool:
     return False
 
 
+def _is_quantity_token(token: str) -> bool:
+    """True if ``token`` is a number rather than a word.
+
+    Strips the punctuation a column value carries — brackets, a trailing
+    percent, a leading currency symbol — then requires a digit and nothing but
+    digits and separators.
+
+    >>> _is_quantity_token("1,685,808")
+    True
+    >>> _is_quantity_token("010+500")
+    True
+    >>> _is_quantity_token("Definitions")
+    False
+    >>> _is_quantity_token("A1(Shoulders)")
+    False
+    """
+    core = token.strip("()[]{}\u201c\u201d\"'")
+    core = core.lstrip("$\u00a3\u20ac\u20a8").rstrip("%")
+    core = core.strip(".,;:")
+    if not core:
+        return False
+    if not any(ch.isdigit() for ch in core):
+        return False
+    return all(ch in _NUMERIC_CHARS for ch in core)
+
+
+def numeric_profile(title: str) -> tuple:
+    """How much of ``title`` is quantities: ``(count, share_of_tokens)``.
+
+    Separated from the scoring so the judgement can be inspected on its own —
+    "why was this rejected" is answerable with one call.
+    """
+    tokens = [t for t in re.split(r"[ \t]+", title.strip()) if t]
+    if not tokens:
+        return 0, 0.0
+    numeric = sum(1 for t in tokens if _is_quantity_token(t))
+    return numeric, numeric / len(tokens)
+
+
+def looks_like_table_row(title: str) -> bool:
+    """True if a heading candidate's title is really a row of a table.
+
+    Contracts and claims are full of priced tables — bills of quantities, rate
+    schedules, measurement sheets — and a row of one is structurally identical
+    to a clause heading: a line-leading number, then text. Read as headings
+    they fabricate a clause hierarchy out of line items, and every chunk under
+    that hierarchy is cited as a clause that does not exist. A nine-page cost
+    annex produced 128 of them.
+
+    The test is the quantities. A clause heading names an obligation and
+    carries no figures; a table row is mostly figures.
+
+    >>> looks_like_table_row("AggregateBase Cum 647.72 2602.7 1,685,808")
+    True
+    >>> looks_like_table_row("Mudflow 017+390 017+425 35.00 3.65 0.50 63.88")
+    True
+    >>> looks_like_table_row("Claims for Payment and/or EOT")
+    False
+    >>> looks_like_table_row("Payment of 10 per cent")
+    False
+    """
+    count, ratio = numeric_profile(title)
+    if count >= _TABLE_ROW_MIN_NUMBERS:
+        return True
+    if count and ratio >= _TABLE_ROW_NUMERIC_RATIO:
+        return True
+    # One quantity beside a unit of measure and little else is still a row:
+    # "Prime Coat Sm 4233.60" reduced to its first columns.
+    if count == 1:
+        words = [w.strip("()[].,;:").lower() for w in re.split(r"[ \t]+", title) if w]
+        if any(w in _TABLE_UNIT_WORDS for w in words) and len(words) <= 5:
+            return True
+    return False
+
+
 def _is_structural_marker(line: str) -> bool:
     """True if the line is a front/back-matter section marker."""
     low = line.strip().lower()
@@ -361,6 +460,14 @@ def _score_heading(number: str, title: str, keyword: str | None, line: str) -> f
     if is_contents_line(line):
         return 0.0
 
+    # So is a table row. Rejected rather than penalised: the scoring signals
+    # above are about how heading-like a line reads, and a priced row reads
+    # perfectly heading-like — short, title-cased, no full stop. It scored 0.55
+    # against a 0.55 threshold, so no penalty short of disqualification is
+    # stable.
+    if looks_like_table_row(title):
+        return 0.0
+
     return max(0.0, min(1.0, score))
 
 
@@ -377,6 +484,14 @@ def _score_margin_heading(number: str, title: str, rest: str, line: str) -> floa
     if is_contents_line(line):
         return 0.0
     if len(rest.split()) < 4:
+        return 0.0
+    # A marginal note is a label; a row of quantities is not one. Only the
+    # note is tested: the provision's text that follows it is prose, and prose
+    # cites clause numbers and states periods and percentages as a matter of
+    # course. Judging a heading by the figures in the paragraph under it threw
+    # away real headings ("4.1 Impartiality") whose body happened to
+    # cross-refer twice.
+    if looks_like_table_row(title):
         return 0.0
 
     score = 0.5
@@ -571,6 +686,28 @@ def build_hierarchy(headings: Sequence[ClauseHeading]) -> list[ClauseNode]:
             nodes[ancestor].children.append(node)
 
     return roots
+
+
+def heading_paths(roots: Sequence[ClauseNode]) -> dict:
+    """Clause number -> its title path from the top of the hierarchy down.
+
+    ``{"20.2.1": ("Employer's and Contractor's Claims", "Claims For Payment",
+    "Notice of Claim")}``. Chunking prepends this so a fragment reading "shall
+    give a Notice within 28 days" carries the provision it sits under; without
+    it every chunk's ancestry was empty, because the stage that chunks never
+    asked for it.
+    """
+    out: dict = {}
+
+    def walk(node: ClauseNode, prefix: tuple) -> None:
+        path = prefix + (node.title,)
+        out[node.number] = path
+        for child in node.children:
+            walk(child, path)
+
+    for root in roots:
+        walk(root, ())
+    return out
 
 
 def detect(pages: Sequence[PageText]) -> DetectionResult:

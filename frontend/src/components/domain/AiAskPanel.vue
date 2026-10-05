@@ -15,7 +15,12 @@ import { formatRelative } from '@/utils/format'
 import { rowsOf } from '@/utils/viewer'
 
 /**
- * Ask a grounded question about one project.
+ * Ask a grounded question, about one project or about a standard form alone.
+ *
+ * A project question reads that project's documents, optionally alongside the
+ * form that governs it. A standard-form question names an edition and no
+ * project: it answers what the form itself requires, which is the question
+ * asked while a contract is being read rather than while a claim is being run.
  *
  * Answers are generated locally and take tens of seconds on CPU; the wait is
  * stated rather than hidden behind a spinner that implies speed. Every answer
@@ -28,10 +33,16 @@ import { rowsOf } from '@/utils/viewer'
  * can be sent to a colleague.
  */
 const props = defineProps({
-  projectId: { type: String, required: true },
+  /** Omitted for a standard-form question, which belongs to no project. */
+  projectId: { type: String, default: null },
   projectName: { type: String, default: null },
+  /** Edition code to read on its own. Required when `projectId` is absent. */
+  edition: { type: String, default: null },
   editionLabel: { type: String, default: null },
 })
+
+/** True when the question is put to the standard form alone. */
+const standardFormOnly = computed(() => !props.projectId)
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -48,8 +59,19 @@ const payload = ref(null)
 const history = ref([])
 const historyLoading = ref(true)
 
-const canAsk = computed(
-  () => auth.canInProject(props.projectId, 'ai.query') && question.value.trim().length >= 4
+// A standard-form question has no project to check `ai.query` against, so the
+// server decides; the client does not pretend to know the answer. Asking
+// without the permission fails with a message rather than a disabled button.
+const canAsk = computed(() => {
+  if (question.value.trim().length < 4) return false
+  if (standardFormOnly.value) return Boolean(props.edition)
+  return auth.canInProject(props.projectId, 'ai.query')
+})
+
+const placeholder = computed(() =>
+  standardFormOnly.value
+    ? 'Ask what the standard form itself requires — for example: within what period must the Contractor give notice of a claim, and what happens if the period is missed?'
+    : 'Ask about this contract, a claim, or the correspondence record — for example: what notice was required before the Contractor could claim an extension of time, and was it given?'
 )
 
 const answerId = computed(() => (route.query.question ? String(route.query.question) : null))
@@ -75,10 +97,13 @@ async function showAnswer(id) {
   error.value = null
   try {
     const data = await aiApi.fetchQuestion(id)
-    // An answer belongs to the project it was asked about. A stale link, or a
-    // project switched under it, must not show one project's answer beside
-    // another project's name.
-    if (data.project && data.project !== props.projectId) {
+    // An answer belongs to what it was asked about. A stale link, or a scope
+    // switched under it, must not show one project's answer beside another
+    // project's name — or a project's answer under a standard-form heading.
+    const belongs = standardFormOnly.value
+      ? !data.project && (!data.edition_code || data.edition_code === props.edition)
+      : data.project === props.projectId
+    if (!belongs) {
       rememberAnswer(null)
       return
     }
@@ -94,7 +119,10 @@ async function showAnswer(id) {
 async function loadHistory() {
   historyLoading.value = true
   try {
-    const data = await aiApi.listQuestions(props.projectId, { page_size: 15 })
+    const data = await aiApi.listQuestions(
+      { projectId: props.projectId, edition: props.edition },
+      { page_size: 15 }
+    )
     history.value = rowsOf(data)
   } catch {
     history.value = []
@@ -115,7 +143,8 @@ async function ask() {
     payload.value = await aiApi.ask({
       question: question.value.trim(),
       projectId: props.projectId,
-      includeKnowledgeBase: includeKnowledgeBase.value,
+      edition: props.edition,
+      includeKnowledgeBase: standardFormOnly.value ? true : includeKnowledgeBase.value,
     })
     rememberAnswer(payload.value?.id)
     loadHistory()
@@ -149,17 +178,20 @@ onMounted(() => {
         v-model="question"
         class="ask__textarea"
         rows="3"
-        placeholder="Ask about this contract, a claim, or the correspondence record — for example: what notice was required before the Contractor could claim an extension of time, and was it given?"
+        :placeholder="placeholder"
         @keydown.ctrl.enter="ask"
         @keydown.meta.enter="ask"
       />
 
       <footer class="ask__footer">
-        <label class="row gap-2 text-xs text-muted">
+        <label v-if="!standardFormOnly" class="row gap-2 text-xs text-muted">
           <input v-model="includeKnowledgeBase" type="checkbox" />
           Include standard-form text
           <span v-if="editionLabel">({{ editionLabel }})</span>
         </label>
+        <p v-else class="text-xs text-muted">
+          Reading {{ editionLabel || edition }} only. No project document is searched.
+        </p>
 
         <div class="row gap-2">
           <p class="text-xs text-muted">
@@ -204,15 +236,23 @@ onMounted(() => {
     <EmptyState
       v-else
       icon="pi pi-sparkles"
-      title="Ask a question about this project"
-      description="Answers are drawn from this project’s documents and, where published, the standard form for its declared edition. Each finding carries the passages that support it."
+      :title="standardFormOnly ? 'Ask a question about the standard form' : 'Ask a question about this project'"
+      :description="
+        standardFormOnly
+          ? `Answers are drawn from the published text of ${editionLabel || edition} alone — what the form itself requires, with nothing from any project read into it. Each finding carries the passages that support it.`
+          : 'Answers are drawn from this project’s documents and, where published, the standard form for its declared edition. Each finding carries the passages that support it.'
+      "
     />
 
     <section class="surface ask__history">
       <p class="section-title">Earlier questions</p>
       <div v-if="historyLoading" class="ask__pad"><LoadingSkeleton variant="text" :rows="3" /></div>
       <p v-else-if="!history.length" class="text-xs text-muted">
-        Nothing asked about this project yet.
+        {{
+          standardFormOnly
+            ? 'Nothing asked about this edition yet.'
+            : 'Nothing asked about this project yet.'
+        }}
       </p>
       <ul v-else class="ask__history-list">
         <li v-for="entry in history" :key="entry.id">

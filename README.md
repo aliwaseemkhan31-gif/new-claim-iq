@@ -30,7 +30,7 @@ has not been run.
 | Area | Status | Verification |
 | --- | --- | --- |
 | Architecture, ADRs, domain design | **Done** | `docs/ARCHITECTURE.md`, `docs/adr/` |
-| Domain layer — clause detection, chunking, KB validation, grounding, retrieval scope + fusion, query understanding, permissions, editions, notice compliance, evidence gaps, chronology, pipeline state machine, quality scoring, analysis strands, confidence rules, review resolution | **Done** | **683 tests passing** on Python 3.9 |
+| Domain layer — clause detection, chunking, KB validation, grounding, retrieval scope + fusion, query understanding, permissions, editions, notice compliance, evidence gaps, chronology, pipeline state machine, quality scoring, analysis strands, confidence rules, review resolution | **Done** | **944 tests passing** on Python 3.9 |
 | Data model and migrations — accounts, projects, documents, ingestion, knowledge, claims, correspondence, analysis | **Verified** | Applied to PostgreSQL 17 + pgvector 0.8.0; HNSW indexes present |
 | Hybrid retrieval — clause-exact, lexical, vector, fusion, edition verification | **Verified** | SQL executed against pgvector; edition isolation checked by SQL |
 | Grounded answering (Phase 4) — Ollama LLM + embeddings, closed-world citations, quotation checks | **Verified** | Live against `qwen2.5:3b-instruct` and `bge-m3` |
@@ -46,9 +46,10 @@ has not been run.
 ### What has genuinely been verified
 
 ```
-735 passed               # backend/tests/domain on Python 3.9  (ADR 0001 guard)
- 74 passed               # backend/tests/integration — Django, no database
-114 passed               # frontend — vitest, jsdom
+944 passed               # backend/tests/domain on Python 3.9  (ADR 0001 guard)
+116 passed               # backend/tests/integration — Django, no database
+184 passed               # frontend — vitest, jsdom
+                         # counts as of October 2026; see docs/TESTING.md to re-run
                          # manage.py check clean; lint clean; production build OK
                          # Phase 6 live: claim analysis through the HTTP API
                          #   against PostgreSQL + pgvector and Ollama
@@ -107,8 +108,8 @@ interface (DRF)  ->  service  ->  repository  ->  PostgreSQL
 ```
 
 The domain layer imports only the standard library. That keeps the
-highest-value logic exhaustively unit-testable, and it is why 471 tests run in
-0.62s on a host with no database. It is also enforced mechanically: domain
+highest-value logic exhaustively unit-testable, and it is why all 944 of
+them run in under two seconds on a host with no database. It is also enforced mechanically: domain
 modules are written to run on Python 3.9, so importing Django there breaks the
 domain test run (ADR 0001).
 
@@ -144,7 +145,7 @@ claimiq-enterprise/
 │   │   ├── analysis/  reports/  notifications/  audit/  imports/
 │   │   └── */domain/           pure Python, framework-free, 3.9-compatible
 │   └── tests/
-│       ├── domain/             471 tests, no I/O, run anywhere
+│       ├── domain/             944 tests, no I/O, run anywhere
 │       └── integration/        require Django + PostgreSQL
 ├── frontend/                   Vue 3 + Vite SPA
 ├── docker/                     Dockerfiles, nginx, Postgres init

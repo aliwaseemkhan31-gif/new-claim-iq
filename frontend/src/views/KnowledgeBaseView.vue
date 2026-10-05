@@ -77,10 +77,21 @@ function onFile(event) {
   uploadFile.value = event.target.files?.[0] ?? null
 }
 
+/**
+ * The edition this exact file is already registered as, when the server has
+ * refused it.
+ *
+ * One file cannot be two editions, and answers are grounded in whichever
+ * edition a project declares — so a form filed under the wrong one yields
+ * confident answers from the wrong contract (ADR 0004).
+ */
+const duplicateEdition = ref(null)
+
 async function submitUpload() {
   if (!uploadFile.value || !uploadEdition.value || uploading.value) return
   uploading.value = true
   fieldErrors.value = {}
+  duplicateEdition.value = null
   try {
     await knowledgeApi.createKnowledgeBase({
       file: uploadFile.value,
@@ -97,6 +108,13 @@ async function submitUpload() {
     uploadOpen.value = false
     await load()
   } catch (err) {
+    if (err?.details?.reason === 'duplicate_source_under_another_edition') {
+      // Stated in the dialog rather than as a toast: the next step is to check
+      // which edition the file actually is, and a toast disappears while the
+      // person is still reading it.
+      duplicateEdition.value = err.details
+      return
+    }
     const field = err?.details?.field
     fieldErrors.value = field ? { [field]: err.message } : {}
     ui.notifyError(err, 'Could not start the knowledge base')
@@ -246,6 +264,15 @@ onMounted(load)
           <input id="kb-name" v-model="uploadName" class="field-input" type="text" />
         </FormField>
 
+        <p v-if="duplicateEdition" class="kb__duplicate">
+          This exact file is already held as
+          <strong>{{ duplicateEdition.edition_label }}</strong>. One file cannot be two
+          editions: a project is answered from the edition it declares, so a form filed
+          under the wrong one produces confident answers from the wrong contract. Check
+          which edition this file is — or replace the source of the existing entry
+          instead of adding another.
+        </p>
+
         <div v-if="uploading" class="kb__progress">
           <div class="kb__bar"><div class="kb__fill" :style="{ width: uploadProgress + '%' }" /></div>
           <p class="text-xs text-muted">Uploading {{ uploadProgress }}%</p>
@@ -300,6 +327,14 @@ onMounted(load)
 .kb__facts dd {
   margin: 0;
   font-size: var(--text-sm);
+}
+
+.kb__duplicate {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
 }
 
 .kb__error {

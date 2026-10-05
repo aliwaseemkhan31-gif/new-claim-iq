@@ -11,7 +11,7 @@ has and has not been executed.
 
 | Component | State | Evidence |
 | --- | --- | --- |
-| Domain layer (11 modules) | **Verified** | 321 tests pass in 0.38s |
+| Domain layer | **Verified** | 944 tests pass in under two seconds (October 2026) |
 | Legacy import against real prototype files | **Verified** | Parses the actual skeletons; asserts mtimes unchanged |
 | Python syntax, all backend modules | **Verified** | `compileall` clean |
 | Legacy app untouched | **Verified** | `git status` and `git diff` clean on `backend/`, `frontend/` |

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Optional, Sequence
 
 from claimiq.ingestion.domain.clause_detection import ClauseHeading, PageText
 
@@ -152,15 +152,99 @@ class ChunkingConfig:
 
 
 @dataclass(frozen=True)
-class ClauseSegment:
-    """A contiguous run of text belonging to one clause."""
+class SegmentPart:
+    """One page's contribution to a clause segment.
 
-    clause_number: str | None
-    clause_title: str | None
+    ``offsets`` maps each character of the normalised ``text`` back to its
+    position in the page's raw text, with one extra entry at the end so an
+    exclusive slice end is always addressable. Normalisation collapses runs of
+    spaces, so without this map a position in the cleaned text says nothing
+    about where the words are on the page — and a highlight drawn from it
+    lands in the wrong place.
+    """
+
     page_number: int
-    start_offset: int
     text: str
-    heading_path: tuple[str, ...] = ()
+    offsets: tuple  # tuple[int, ...]; len == len(text) + 1
+
+
+@dataclass(frozen=True)
+class ClauseSegment:
+    """A contiguous run of text belonging to one clause.
+
+    A clause does not stop at a page break, so a segment may carry parts from
+    several consecutive pages. It used to be cut at every break, which had two
+    consequences: the tail of a clause became a chunk owned by that clause but
+    starting mid-sentence, and — because a segment that fits in one chunk is
+    marked complete — that fragment was flagged as the whole clause. A
+    retriever preferring complete clauses then preferred the fragment.
+    """
+
+    clause_number: Optional[str]
+    clause_title: Optional[str]
+    parts: tuple  # tuple[SegmentPart, ...]
+    starts_clause: bool = False
+    """True when this run begins at the clause's own heading, rather than
+    continuing a clause that began earlier."""
+    heading_path: tuple = ()
+
+    #: Separator used to join parts into one body. Two newlines, so a page
+    #: break reads as a paragraph break rather than running two lines together.
+    JOIN = "\n\n"
+
+    @property
+    def page_number(self) -> int:
+        return self.parts[0].page_number if self.parts else 0
+
+    @property
+    def start_offset(self) -> int:
+        return self.parts[0].offsets[0] if self.parts and self.parts[0].offsets else 0
+
+    @property
+    def text(self) -> str:
+        return self.JOIN.join(part.text for part in self.parts)
+
+    def locate(self, start: int, end: int) -> tuple:
+        """Map a ``[start, end)`` slice of :attr:`text` onto the source pages.
+
+        Returns one :class:`ChunkSpan` per page the slice touches, each holding
+        that page's own character range. A chunk that straddles a page break
+        therefore highlights correctly on both pages instead of claiming the
+        whole segment on the first.
+        """
+        spans: list[ChunkSpan] = []
+        cursor = 0
+        for index, part in enumerate(self.parts):
+            if index:
+                cursor += len(self.JOIN)
+            part_start, part_end = cursor, cursor + len(part.text)
+            cursor = part_end
+
+            overlap_start = max(start, part_start)
+            overlap_end = min(end, part_end)
+            if overlap_start >= overlap_end:
+                continue
+
+            local_start = overlap_start - part_start
+            local_end = overlap_end - part_start
+            spans.append(
+                ChunkSpan(
+                    page_number=part.page_number,
+                    start_offset=part.offsets[local_start],
+                    end_offset=part.offsets[local_end],
+                )
+            )
+        if not spans and self.parts:
+            # A degenerate slice still has to point somewhere real.
+            first = self.parts[0]
+            spans.append(
+                ChunkSpan(
+                    page_number=first.page_number,
+                    start_offset=first.offsets[0],
+                    end_offset=first.offsets[0],
+                )
+            )
+        return tuple(spans)
 
 
 def _normalise_whitespace(text: str) -> str:
@@ -169,76 +253,131 @@ def _normalise_whitespace(text: str) -> str:
     Line structure carries meaning in contracts (sub-paragraph lists), so it is
     preserved; only horizontal runs from PDF extraction are collapsed.
     """
-    lines = [_WS_RE.sub(" ", line).strip() for line in text.splitlines()]
-    out: list[str] = []
-    blank = False
-    for line in lines:
-        if line:
-            out.append(line)
-            blank = False
-        elif not blank:
-            out.append("")
-            blank = True
-    return "\n".join(out).strip()
+    return _normalise_with_offsets(text)[0]
+
+
+def _normalise_with_offsets(text: str):
+    """:func:`_normalise_whitespace`, plus where every character came from.
+
+    Returns ``(normalised, offsets)`` where ``offsets[i]`` is the index in
+    ``text`` of the character that became ``normalised[i]``, and the final
+    entry is one past the last character kept.
+    """
+    out_chars: list[str] = []
+    out_offsets: list[int] = []
+
+    base = 0
+    pending_blank = False
+    wrote_any = False
+
+    for line in text.split("\n"):
+        line_chars: list[str] = []
+        line_offsets: list[int] = []
+
+        index = 0
+        length = len(line)
+        while index < length and line[index] in " \t":
+            index += 1
+        while index < length:
+            char = line[index]
+            if char in " \t":
+                run_end = index
+                while run_end < length and line[run_end] in " \t":
+                    run_end += 1
+                if run_end < length:  # not trailing whitespace
+                    line_chars.append(" ")
+                    line_offsets.append(base + index)
+                index = run_end
+            else:
+                line_chars.append(char)
+                line_offsets.append(base + index)
+                index += 1
+
+        if line_chars:
+            if wrote_any:
+                # One newline for the line break, plus one more if a blank line
+                # separated them — mirroring the blank-run collapse.
+                for _ in range(2 if pending_blank else 1):
+                    out_chars.append("\n")
+                    out_offsets.append(line_offsets[0])
+            out_chars.extend(line_chars)
+            out_offsets.extend(line_offsets)
+            wrote_any = True
+            pending_blank = False
+        elif wrote_any:
+            pending_blank = True
+
+        base += len(line) + 1  # the "\n" consumed by split
+
+    end = (out_offsets[-1] + 1) if out_offsets else 0
+    out_offsets.append(end)
+    return "".join(out_chars), tuple(out_offsets)
+
+
+def _merge_parts(parts: Sequence[SegmentPart]) -> tuple:
+    return tuple(parts)
 
 
 def segment_by_clause(
     pages: Sequence[PageText],
     headings: Sequence[ClauseHeading],
-    heading_titles: dict[str, tuple[str, ...]] | None = None,
+    heading_titles=None,
 ) -> list[ClauseSegment]:
     """Split page text into runs of text, each owned by one clause.
 
     A clause's text runs from its heading to the next heading, which may be on
-    a later page. Text before the first heading is emitted with
-    ``clause_number=None`` rather than discarded — recitals and definitions
-    preambles are substantive.
+    a later page; consecutive pages carrying the same clause are joined into
+    one segment rather than cut at the break. Text before the first heading is
+    emitted with ``clause_number=None`` rather than discarded — recitals and
+    definitions preambles are substantive.
     """
-    by_page: dict[int, list[ClauseHeading]] = {}
+    by_page: dict = {}
     for heading in headings:
         by_page.setdefault(heading.page_number, []).append(heading)
     for page_headings in by_page.values():
         page_headings.sort(key=lambda h: h.char_offset)
 
-    segments: list[ClauseSegment] = []
-    current_number: str | None = None
-    current_title: str | None = None
+    titles = heading_titles or {}
+    # (clause_number, clause_title, starts_clause, heading_path, part)
+    raw: list = []
+    current_number = None
+    current_title = None
+
+    def emit(number, title, starts, page_number, raw_text, base):
+        body, offsets = _normalise_with_offsets(raw_text)
+        if not body:
+            return
+        shifted = tuple(offset + base for offset in offsets)
+        raw.append(
+            (
+                number,
+                title,
+                starts,
+                titles.get(number or "", ()),
+                SegmentPart(page_number=page_number, text=body, offsets=shifted),
+            )
+        )
 
     for page in pages:
         text = page.text
         page_headings = by_page.get(page.page_number, [])
 
         if not page_headings:
-            body = _normalise_whitespace(text)
-            if body:
-                segments.append(
-                    ClauseSegment(
-                        clause_number=current_number,
-                        clause_title=current_title,
-                        page_number=page.page_number,
-                        start_offset=0,
-                        text=body,
-                        heading_path=(heading_titles or {}).get(current_number or "", ()),
-                    )
-                )
+            emit(current_number, current_title, False, page.page_number, text, 0)
             continue
 
         # Text preceding the first heading on this page belongs to whatever
         # clause was open when the page began.
         first = page_headings[0]
         if first.char_offset > 0:
-            lead = _normalise_whitespace(text[: first.char_offset])
-            if lead:
-                segments.append(
-                    ClauseSegment(
-                        clause_number=current_number,
-                        clause_title=current_title,
-                        page_number=page.page_number,
-                        start_offset=0,
-                        text=lead,
-                        heading_path=(heading_titles or {}).get(current_number or "", ()),
-                    )
-                )
+            emit(
+                current_number,
+                current_title,
+                False,
+                page.page_number,
+                text[: first.char_offset],
+                0,
+            )
 
         for index, heading in enumerate(page_headings):
             start = heading.char_offset
@@ -247,62 +386,113 @@ def segment_by_clause(
                 if index + 1 < len(page_headings)
                 else len(text)
             )
-            body = _normalise_whitespace(text[start:end])
             current_number = heading.number
             current_title = heading.title
-            if body:
-                segments.append(
-                    ClauseSegment(
-                        clause_number=heading.number,
-                        clause_title=heading.title,
-                        page_number=page.page_number,
-                        start_offset=start,
-                        text=body,
-                        heading_path=(heading_titles or {}).get(heading.number, ()),
-                    )
-                )
+            emit(heading.number, heading.title, True, page.page_number, text[start:end], start)
+
+    # Join consecutive runs of the same clause on consecutive pages. Only
+    # consecutive pages: a gap means a page was dropped as front matter, and
+    # bridging it would weld together text that is not continuous.
+    segments: list[ClauseSegment] = []
+    pending: list = []
+
+    def flush_pending() -> None:
+        if not pending:
+            return
+        number, title, starts, path, _ = pending[0]
+        segments.append(
+            ClauseSegment(
+                clause_number=number,
+                clause_title=title,
+                parts=_merge_parts([item[4] for item in pending]),
+                starts_clause=starts,
+                heading_path=path,
+            )
+        )
+        pending.clear()
+
+    for item in raw:
+        if pending:
+            previous = pending[-1]
+            same_clause = previous[0] == item[0]
+            # A new run that starts at its own heading begins a new segment
+            # even when it carries the same number — a clause repeated in a
+            # schedule is not a continuation of the one in the conditions.
+            continues = (
+                same_clause
+                and not item[2]
+                and item[4].page_number in (previous[4].page_number, previous[4].page_number + 1)
+            )
+            if not continues:
+                flush_pending()
+        pending.append(item)
+    flush_pending()
 
     return segments
 
 
-def _split_oversized(text: str, max_chars: int) -> list[str]:
+def _split_spans(pattern, text: str, base: int = 0) -> list:
+    """Split ``text`` on ``pattern``, keeping each piece's start index."""
+    pieces: list = []
+    position = 0
+    for match in pattern.finditer(text):
+        pieces.append((text[position : match.start()], base + position))
+        position = match.end()
+    pieces.append((text[position:], base + position))
+    return pieces
+
+
+def _stripped(piece: str, start: int):
+    """Strip ``piece``, moving ``start`` to the first character kept."""
+    lead = len(piece) - len(piece.lstrip())
+    return piece.strip(), start + lead
+
+
+def _split_oversized(text: str, max_chars: int, base: int = 0) -> list:
     """Split text with no sentence boundary, at whitespace, under ``max_chars``."""
-    parts: list[str] = []
-    remaining = text
-    while len(remaining) > max_chars:
-        window = remaining[:max_chars]
+    parts: list = []
+    position = 0
+    while len(text) - position > max_chars:
+        window = text[position : position + max_chars]
         cut = window.rfind(" ")
         if cut <= 0:
             cut = max_chars
-        parts.append(remaining[:cut].strip())
-        remaining = remaining[cut:].strip()
-    if remaining:
-        parts.append(remaining)
+        piece, start = _stripped(text[position : position + cut], base + position)
+        if piece:
+            parts.append((piece, start))
+        position += cut
+    remainder, start = _stripped(text[position:], base + position)
+    if remainder:
+        parts.append((remainder, start))
     return parts
 
 
-def _split_units(text: str, max_chars: int) -> list[str]:
+def _split_units(text: str, max_chars: int) -> list:
     """Break text into the smallest units chunking may recombine.
 
     Paragraphs first, then sentences, then a hard whitespace split. Splitting at
     a semantic boundary keeps a single obligation intact wherever possible.
+    Each unit carries its start index in ``text``, so a chunk built from units
+    knows where on the page it came from.
     """
-    units: list[str] = []
-    for paragraph in _PARAGRAPH_SPLIT_RE.split(text):
-        paragraph = paragraph.strip()
+    units: list = []
+    for raw_paragraph, paragraph_start in _split_spans(_PARAGRAPH_SPLIT_RE, text):
+        paragraph, paragraph_start = _stripped(raw_paragraph, paragraph_start)
         if not paragraph:
             continue
         if len(paragraph) <= max_chars:
-            units.append(paragraph)
+            units.append((paragraph, paragraph_start))
             continue
-        for sentence in _SENTENCE_END_RE.split(paragraph):
-            sentence = sentence.strip()
+        for raw_sentence, sentence_start in _split_spans(
+            _SENTENCE_END_RE, paragraph, paragraph_start
+        ):
+            sentence, sentence_start = _stripped(raw_sentence, sentence_start)
             if not sentence:
                 continue
             if len(sentence) <= max_chars:
-                units.append(sentence)
+                units.append((sentence, sentence_start))
             else:
-                units.extend(_split_oversized(sentence, max_chars))
+                units.extend(_split_oversized(sentence, max_chars, sentence_start))
     return units
 
 
@@ -322,39 +512,39 @@ def chunk_segment(
     segment: ClauseSegment,
     config: ChunkingConfig,
     start_sequence: int,
-) -> list[Chunk]:
+) -> list:
     """Chunk one clause segment.
 
     A clause that fits in a single chunk is emitted whole and marked
-    ``is_complete_clause``. Overlap is applied only between chunks of the same
-    clause.
+    ``is_complete_clause`` — but only when the segment begins at the clause's
+    own heading, so the tail of a clause carried over a page break is never
+    passed off as the whole of it. Overlap is applied only between chunks of
+    the same clause.
     """
-    body = segment.text.strip()
-    if not body:
+    body = segment.text
+    if not body.strip():
         return []
+
+    whole_clause = segment.clause_number is not None and segment.starts_clause
 
     if len(body) <= config.max_chars:
         return [
             Chunk(
                 text=body,
-                spans=(
-                    ChunkSpan(
-                        page_number=segment.page_number,
-                        start_offset=segment.start_offset,
-                        end_offset=segment.start_offset + len(segment.text),
-                    ),
-                ),
+                spans=segment.locate(0, len(body)),
                 clause_number=segment.clause_number,
                 clause_title=segment.clause_title,
                 sequence=start_sequence,
                 heading_path=segment.heading_path,
-                is_complete_clause=segment.clause_number is not None,
+                is_complete_clause=whole_clause,
             )
         ]
 
     units = _split_units(body, config.max_chars)
-    chunks: list[Chunk] = []
+    chunks: list = []
     buffer = ""
+    buffer_start = 0
+    buffer_end = 0
     sequence = start_sequence
 
     def flush() -> None:
@@ -367,13 +557,11 @@ def chunk_segment(
         chunks.append(
             Chunk(
                 text=content,
-                spans=(
-                    ChunkSpan(
-                        page_number=segment.page_number,
-                        start_offset=segment.start_offset,
-                        end_offset=segment.start_offset + len(segment.text),
-                    ),
-                ),
+                # The span covers this chunk's own material. The overlap tail
+                # repeats the previous chunk's closing words, and a highlight
+                # that reached back over them would mark the same sentence on
+                # two chunks.
+                spans=segment.locate(buffer_start, buffer_end),
                 clause_number=segment.clause_number,
                 clause_title=segment.clause_title,
                 sequence=sequence,
@@ -383,17 +571,23 @@ def chunk_segment(
         )
         sequence += 1
 
-    for unit in units:
+    for unit, unit_start in units:
         candidate = f"{buffer}\n\n{unit}".strip() if buffer else unit
         if len(candidate) > config.target_chars and buffer:
             flush()
             tail = _overlap_tail(buffer, config.overlap_chars)
             buffer = f"{tail}\n\n{unit}".strip() if tail else unit
+            buffer_start = unit_start
+            buffer_end = unit_start + len(unit)
         else:
+            if not buffer:
+                buffer_start = unit_start
             buffer = candidate
+            buffer_end = unit_start + len(unit)
 
     flush()
     return chunks
+
 
 
 def chunk_document(
@@ -419,13 +613,21 @@ def chunk_document(
     cfg.validate()
 
     if not cfg.respect_clause_boundaries:
-        merged = "\n\n".join(_normalise_whitespace(p.text) for p in pages if p.text.strip())
+        parts = []
+        for page in pages:
+            if not page.text.strip():
+                continue
+            body, offsets = _normalise_with_offsets(page.text)
+            if body:
+                parts.append(
+                    SegmentPart(page_number=page.page_number, text=body, offsets=offsets)
+                )
+        if not parts:
+            return []
         segment = ClauseSegment(
             clause_number=None,
             clause_title=None,
-            page_number=pages[0].page_number if pages else 1,
-            start_offset=0,
-            text=merged,
+            parts=tuple(parts),
         )
         return chunk_segment(segment, cfg, 0)
 

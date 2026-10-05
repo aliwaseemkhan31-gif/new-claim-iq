@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { useRouter } from 'vue-router'
 
@@ -15,6 +15,7 @@ import Pager from '@/components/common/Pager.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import { useListQuery } from '@/composables/useListQuery'
 import { useAuthStore } from '@/stores/auth'
+import { useProjectsStore } from '@/stores/projects'
 import { useUiStore } from '@/stores/ui'
 import { EM_DASH, formatCurrency, formatRelative } from '@/utils/format'
 import { rowsOf } from '@/utils/viewer'
@@ -25,6 +26,12 @@ import { rowsOf } from '@/utils/viewer'
  * The awareness date is asked for at creation because every notice period runs
  * from it; it is optional, and a claim without one is shown as such rather
  * than having a date assumed for it.
+ *
+ * One form serves creation and editing. They ask for the same facts, and a
+ * separate edit form is where the two drift apart — a field added to one and
+ * forgotten in the other. Which project the claim belongs to is part of that
+ * form: across the register a claim has to be *given* a project, and a claim
+ * raised against the wrong one has to be moved rather than retyped.
  */
 const props = defineProps({
   projectId: { type: String, default: null },
@@ -34,6 +41,7 @@ const props = defineProps({
 const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
+const projectsStore = useProjectsStore()
 
 const CLAIM_TYPES = [
   ['eot', 'Extension of Time'],
@@ -84,9 +92,18 @@ const pageCount = computed(() =>
   total.value == null ? 1 : Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 )
 
-const canCreate = computed(
-  () => Boolean(props.projectId) && auth.canInProject(props.projectId, 'claim.create')
+// Inside a project, the question is whether this project may be written to.
+// Across projects, whether any may be — the project is then chosen in the
+// form, and the server checks it against that choice.
+const canCreate = computed(() =>
+  props.projectId
+    ? auth.canInProject(props.projectId, 'claim.create')
+    : auth.hasPermission('claim.create')
 )
+
+function canEdit(claim) {
+  return auth.canInProject(claim.project, 'claim.edit')
+}
 
 async function load() {
   loading.value = true
@@ -250,16 +267,22 @@ async function acceptDraft() {
   )
 }
 
-// -- Creation ---------------------------------------------------------------
+// -- Creating and editing ----------------------------------------------------
 
 const createOpen = ref(false)
 const saving = ref(false)
 const fieldErrors = ref({})
 
+/** The claim being edited, or null when the form is creating a new one. */
+const editing = ref(null)
+const isEditing = computed(() => Boolean(editing.value))
+
 const EMPTY = {
+  project: '',
   title: '',
   reference: '',
   claim_type: 'eot',
+  status: 'draft',
   claimant: '',
   respondent: '',
   event_date: '',
@@ -275,55 +298,193 @@ const EMPTY = {
 
 const form = ref({ ...EMPTY })
 
-async function openCreate() {
-  form.value = { ...EMPTY }
-  fieldErrors.value = {}
-  createOpen.value = true
-  if (parties.value.length || !props.projectId) return
+// A register scoped to one project does not ask which project; across projects
+// it must, both to create a claim and to move one.
+const asksForProject = computed(() => !props.projectId)
+
+const projectOptions = computed(() => rowsOf(projectsStore.items))
+
+const movingProject = computed(
+  () => isEditing.value && form.value.project && form.value.project !== editing.value.project
+)
+
+const destinationName = computed(
+  () => projectOptions.value.find((project) => project.id === form.value.project)?.name ?? null
+)
+
+function ensureProjectOptions() {
+  if (!asksForProject.value || projectsStore.loaded) return
+  projectsStore.fetchProjects({ page_size: 100, ordering: 'name' }).catch(() => {})
+}
+
+/**
+ * Parties for whichever project the form is pointed at.
+ *
+ * Parties belong to a project, so changing the project changes which claimant
+ * and respondent exist. A reference that does not resolve in the new project
+ * is cleared rather than carried, here and on the server.
+ */
+async function loadParties(projectId) {
+  if (!projectId) {
+    parties.value = []
+    return
+  }
   try {
-    parties.value = await projectsApi.listParties(props.projectId)
+    parties.value = await projectsApi.listParties(projectId)
   } catch {
     parties.value = []
   }
 }
 
-async function submitCreate() {
+// True while the form is being filled from a claim or reset for a new one.
+// Filling the form changes its project, which is not the user choosing a
+// different one — and reacting to it as if it were would clear the claimant
+// the form had just been given.
+const populating = ref(false)
+
+/** Load the form with `values` without the project watcher reading it as a move. */
+async function populate(values) {
+  populating.value = true
+  form.value = values
+  await nextTick()
+  populating.value = false
+  await loadParties(form.value.project)
+}
+
+watch(
+  () => form.value.project,
+  async (projectId, previous) => {
+    if (populating.value || !createOpen.value || projectId === previous) return
+    await loadParties(projectId)
+    const known = new Set(parties.value.map((party) => party.id))
+    if (!known.has(form.value.claimant)) form.value.claimant = ''
+    if (!known.has(form.value.respondent)) form.value.respondent = ''
+  }
+)
+
+async function openCreate() {
+  editing.value = null
+  fieldErrors.value = {}
+  createOpen.value = true
+  ensureProjectOptions()
+  await populate({ ...EMPTY, project: props.projectId || '' })
+}
+
+/**
+ * Open the register's form on an existing claim.
+ *
+ * The claim is re-read rather than edited from the row: a row carries a
+ * summary, and saving a form built from a summary would blank every field the
+ * register does not show.
+ */
+async function openEdit(claim) {
+  fieldErrors.value = {}
+  editing.value = claim
+  createOpen.value = true
+  ensureProjectOptions()
+  try {
+    const full = await claimsApi.fetchClaim(claim.id)
+    editing.value = full
+    await populate({
+      ...EMPTY,
+      project: full.project ?? '',
+      title: full.title ?? '',
+      reference: full.reference ?? '',
+      claim_type: full.claim_type ?? 'eot',
+      status: full.status ?? 'draft',
+      claimant: full.claimant ?? '',
+      respondent: full.respondent ?? '',
+      event_date: full.event_date ?? '',
+      awareness_date: full.awareness_date ?? '',
+      notice_date: full.notice_date ?? '',
+      submission_date: full.submission_date ?? '',
+      amount_claimed: full.amount_claimed ?? '',
+      currency: full.currency ?? '',
+      time_claimed_days: full.time_claimed_days ?? '',
+      contractual_basis: (full.contractual_basis ?? []).join(', '),
+      description: full.description ?? '',
+    })
+  } catch (err) {
+    createOpen.value = false
+    editing.value = null
+    ui.notifyError(err, 'Could not open the claim')
+  }
+}
+
+/** Fields that are sent as null when cleared, rather than omitted. */
+const NULLABLE = [
+  'claimant',
+  'respondent',
+  'event_date',
+  'awareness_date',
+  'notice_date',
+  'submission_date',
+  'amount_claimed',
+  'time_claimed_days',
+]
+
+function buildPayload() {
+  const payload = {
+    project: form.value.project || props.projectId,
+    title: form.value.title.trim(),
+    reference: form.value.reference.trim(),
+    claim_type: form.value.claim_type,
+    description: form.value.description.trim(),
+    contractual_basis: form.value.contractual_basis
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  }
+  if (isEditing.value) payload.status = form.value.status
+
+  for (const field of NULLABLE) {
+    const value = form.value[field]
+    if (value) payload[field] = value
+    // On an edit, a field the user emptied is an instruction to clear it. On a
+    // create there is nothing to clear, so it is simply left out.
+    else if (isEditing.value) payload[field] = null
+  }
+  if (form.value.currency) payload.currency = form.value.currency.trim().toUpperCase()
+  else if (isEditing.value) payload.currency = ''
+  return payload
+}
+
+async function submitForm() {
   if (saving.value || !form.value.title.trim()) return
+  if (!form.value.project && !props.projectId) {
+    fieldErrors.value = { project: 'Choose the project this claim belongs to.' }
+    return
+  }
   saving.value = true
   fieldErrors.value = {}
+  const moved = movingProject.value
+  const destination = destinationName.value
   try {
-    const payload = {
-      project: props.projectId,
-      title: form.value.title.trim(),
-      reference: form.value.reference.trim(),
-      claim_type: form.value.claim_type,
-      description: form.value.description.trim(),
-      contractual_basis: form.value.contractual_basis
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean),
+    if (isEditing.value) {
+      await claimsApi.updateClaim(editing.value.id, buildPayload())
+      ui.notifySuccess(
+        'Claim saved',
+        moved
+          ? `Moved to ${destination}, together with its events and evidence. A claimant or respondent recorded on the previous project has been cleared.`
+          : null
+      )
+      createOpen.value = false
+      editing.value = null
+      load()
+    } else {
+      const claim = await claimsApi.createClaim(buildPayload())
+      ui.notifySuccess('Claim created')
+      createOpen.value = false
+      router.push({ name: 'claim-detail', params: { claimId: claim.id } })
     }
-    for (const field of [
-      'claimant',
-      'respondent',
-      'event_date',
-      'awareness_date',
-      'notice_date',
-      'submission_date',
-      'amount_claimed',
-      'time_claimed_days',
-    ]) {
-      if (form.value[field]) payload[field] = form.value[field]
-    }
-    if (form.value.currency) payload.currency = form.value.currency.trim().toUpperCase()
-
-    const claim = await claimsApi.createClaim(payload)
-    ui.notifySuccess('Claim created')
-    createOpen.value = false
-    router.push({ name: 'claim-detail', params: { claimId: claim.id } })
   } catch (err) {
     fieldErrors.value = err?.fieldErrors ?? {}
-    if (!Object.keys(fieldErrors.value).length) ui.notifyError(err, 'Could not create the claim')
+    if (!Object.keys(fieldErrors.value).length) {
+      ui.notifyError(
+        err,
+        isEditing.value ? 'Could not save the claim' : 'Could not create the claim'
+      )
+    }
   } finally {
     saving.value = false
   }
@@ -414,6 +575,7 @@ onMounted(load)
               <th scope="col" class="cell-numeric">Time</th>
               <th scope="col">Assessment</th>
               <th scope="col">Updated</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -459,6 +621,18 @@ onMounted(load)
               </td>
               <td><StatusBadge :status="claim.human_outcome" size="sm" /></td>
               <td>{{ formatRelative(claim.updated_at) }}</td>
+              <td class="cell-actions">
+                <AppButton
+                  v-if="canEdit(claim)"
+                  variant="ghost"
+                  size="sm"
+                  icon="pi pi-pencil"
+                  label="Edit"
+                  :title="`Edit ${claim.title}`"
+                  @click.stop="openEdit(claim)"
+                  @keydown.enter.stop
+                />
+              </td>
             </tr>
           </tbody>
         </table>
@@ -592,12 +766,38 @@ onMounted(load)
 
     <AppDialog
       v-model="createOpen"
-      title="New claim"
+      :title="isEditing ? 'Edit claim' : 'New claim'"
       description="Record what is claimed and the dates it turns on. Notice periods are computed from the awareness date, so it is worth establishing early."
       size="lg"
       :busy="saving"
     >
       <div class="stack gap-4">
+        <FormField
+          v-if="asksForProject"
+          label="Project"
+          for-id="claim-project"
+          required
+          :error="fieldErrors.project"
+          :hint="
+            isEditing
+              ? 'Moving the claim takes its events and evidence with it.'
+              : 'The project this claim is raised under.'
+          "
+        >
+          <select id="claim-project" v-model="form.project" class="field-input">
+            <option value="">Choose a project</option>
+            <option v-for="project in projectOptions" :key="project.id" :value="project.id">
+              {{ project.name }}
+            </option>
+          </select>
+        </FormField>
+
+        <p v-if="movingProject" class="claims__warning">
+          This claim will move from {{ editing.project_name }} to {{ destinationName }}. Its
+          events and evidence move with it. A claimant or respondent recorded on
+          {{ editing.project_name }} does not exist on the new project and will be cleared.
+        </p>
+
         <FormField label="Title" for-id="claim-title" required :error="fieldErrors.title">
           <input id="claim-title" v-model="form.title" class="field-input" type="text" />
         </FormField>
@@ -609,6 +809,21 @@ onMounted(load)
           <FormField label="Type" for-id="claim-type" class="grow" :error="fieldErrors.claim_type">
             <select id="claim-type" v-model="form.claim_type" class="field-input">
               <option v-for="[value, label] in CLAIM_TYPES" :key="value" :value="value">
+                {{ label }}
+              </option>
+            </select>
+          </FormField>
+          <!-- A new claim starts as a draft; the status is only a question once
+               the claim exists and has moved on. -->
+          <FormField
+            v-if="isEditing"
+            label="Status"
+            for-id="claim-status"
+            class="grow"
+            :error="fieldErrors.status"
+          >
+            <select id="claim-status" v-model="form.status" class="field-input">
+              <option v-for="[value, label] in CLAIM_STATUSES" :key="value" :value="value">
                 {{ label }}
               </option>
             </select>
@@ -688,10 +903,10 @@ onMounted(load)
         <AppButton variant="ghost" label="Cancel" :disabled="saving" @click="createOpen = false" />
         <AppButton
           variant="primary"
-          label="Create claim"
+          :label="isEditing ? 'Save claim' : 'Create claim'"
           :loading="saving"
           :disabled="!form.title.trim()"
-          @click="submitCreate"
+          @click="submitForm"
         />
       </template>
     </AppDialog>
@@ -754,5 +969,19 @@ onMounted(load)
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-muted);
+}
+
+.cell-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.claims__warning {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
 }
 </style>

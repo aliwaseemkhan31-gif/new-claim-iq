@@ -21,7 +21,7 @@ import { rowsOf } from '@/utils/viewer'
  * The choice is also published to the store, so the sidebar names it and the
  * next global screen inherits it instead of starting empty.
  */
-export function useProjectSelection(queryKey = 'project') {
+export function useProjectSelection(queryKey = 'project', { carryAmbient = true } = {}) {
   const route = useRoute()
   const router = useRouter()
   const projects = useProjectsStore()
@@ -47,7 +47,13 @@ export function useProjectSelection(queryKey = 'project') {
 
   // Carry the ambient project in when the URL does not name one, so moving
   // from a project workspace to a global screen does not ask again.
+  //
+  // A screen that is not currently working in a project — the AI workspace
+  // reading a standard form on its own — passes `carryAmbient: false`, so the
+  // URL is not quietly given a project the screen is not using.
   onMounted(() => {
+    const wanted = typeof carryAmbient === 'function' ? carryAmbient() : carryAmbient
+    if (!wanted) return
     if (!projectId.value && projects.activeProjectId) projectId.value = projects.activeProjectId
   })
 

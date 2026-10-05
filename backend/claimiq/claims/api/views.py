@@ -1,6 +1,7 @@
 """Claim endpoints."""
 from __future__ import annotations
 
+from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 from rest_framework import serializers, viewsets
@@ -36,6 +37,7 @@ from claimiq.claims.services.timeline import build_project_chronology
 from claimiq.core.api.permissions import access_for
 from claimiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
 from claimiq.knowledge.domain.editions import DEFAULT_REGISTRY
+from claimiq.projects.models import Party, Project
 
 
 class ClaimEventSerializer(serializers.ModelSerializer):
@@ -156,9 +158,72 @@ class ClaimViewSet(viewsets.ModelViewSet):
         self._require(CLAIM_CREATE.code, str(getattr(project_id, "pk", project_id)))
         serializer.save(created_by=self.request.user)
 
+    @transaction.atomic
     def perform_update(self, serializer) -> None:
-        self._require(CLAIM_EDIT.code, str(serializer.instance.project_id))
+        claim = serializer.instance
+        self._require(CLAIM_EDIT.code, str(claim.project_id))
+
+        destination = serializer.validated_data.get("project")
+        destination_id = getattr(destination, "pk", destination)
+        if destination_id is None or destination_id == claim.project_id:
+            serializer.save(updated_by=self.request.user)
+            return
+
+        self._move_to_project(claim, destination_id)
         serializer.save(updated_by=self.request.user)
+        self._follow_claim_to_project(claim, destination_id)
+
+    def _move_to_project(self, claim: Claim, destination_id) -> None:
+        """Check that this claim may be put into ``destination_id``.
+
+        Moving a claim is two acts, not one: removing it from where it is, and
+        placing it where it is going. Checking only the source — which is what
+        an ordinary edit check does — would let someone with edit rights on one
+        project deposit a claim into a project they cannot otherwise write to.
+        """
+        context = access_for(self.request)
+        if context is None or context.organization_id is None:
+            raise PermissionDeniedError("You are not a member of an active organization.")
+
+        destination = Project.objects.filter(
+            pk=destination_id, organization_id=context.organization_id
+        ).first()
+        if destination is None or destination.pk not in context.accessible_project_ids:
+            raise ValidationError(
+                "That project does not exist, or you cannot see it.",
+                details={"field": "project"},
+            )
+
+        self._require(CLAIM_CREATE.code, str(destination.pk))
+
+    def _follow_claim_to_project(self, claim: Claim, destination_id) -> None:
+        """Move what belongs to the claim along with it.
+
+        A claim's events and evidence each carry their own project, so a claim
+        moved on its own leaves its chronology and its evidence behind in the
+        project it came from — present on the claim, absent from every register
+        that lists them. They move with it.
+
+        Parties are project entities, so a claimant recorded on the old project
+        does not exist on the new one. The reference is cleared rather than
+        carried, because a claim naming a party from another project is a
+        quieter error than one naming nobody.
+        """
+        ClaimEvent.objects.filter(claim=claim).update(project_id=destination_id)
+        Evidence.objects.filter(claim=claim).update(project_id=destination_id)
+
+        stale = [
+            field
+            for field in ("claimant", "respondent")
+            if getattr(claim, f"{field}_id")
+            and not Party.objects.filter(
+                pk=getattr(claim, f"{field}_id"), project_id=destination_id
+            ).exists()
+        ]
+        if stale:
+            for field in stale:
+                setattr(claim, f"{field}_id", None)
+            claim.save(update_fields=[*stale, "updated_at"])
 
     def perform_destroy(self, instance: Claim) -> None:
         self._require(CLAIM_DELETE.code, str(instance.project_id))

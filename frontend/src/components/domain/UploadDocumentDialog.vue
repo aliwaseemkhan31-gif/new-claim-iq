@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 
+import { useRouter } from 'vue-router'
+
 import * as documentsApi from '@/api/documents'
 import AppButton from '@/components/common/AppButton.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
@@ -24,6 +26,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'uploaded'])
 
 const ui = useUiStore()
+const router = useRouter()
 
 const file = ref(null)
 const documentType = ref('')
@@ -80,10 +83,26 @@ watch(
   }
 )
 
-async function submit() {
+// A different file is a different question.
+watch(file, () => {
+  duplicateOf.value = null
+})
+
+/**
+ * The document already holding these bytes, when the server has refused the
+ * upload as a duplicate.
+ *
+ * The same standard form uploaded twice is indexed twice and comes back twice
+ * in every result set, so the server stops it and names the existing copy.
+ * Keeping both is still allowed — it is a question for the person, not a rule.
+ */
+const duplicateOf = ref(null)
+
+async function submit({ allowDuplicate = false } = {}) {
   if (!canSubmit.value) return
   busy.value = true
   fieldErrors.value = {}
+  if (!allowDuplicate) duplicateOf.value = null
   try {
     const result = await documentsApi.uploadDocument({
       projectId: props.projectId,
@@ -92,6 +111,7 @@ async function submit() {
       title: title.value,
       reference: reference.value,
       documentDate: documentDate.value || undefined,
+      allowDuplicate,
       onProgress: (value) => {
         progress.value = value
       },
@@ -108,12 +128,26 @@ async function submit() {
     }
     emit('update:modelValue', false)
   } catch (error) {
+    if (error?.details?.reason === 'duplicate_of_another_document') {
+      // Not an error to dismiss: the next step is a decision, so the dialog
+      // stays open and states what is already there.
+      duplicateOf.value = error.details
+      return
+    }
     const field = error?.details?.field
     fieldErrors.value = field ? { [field]: error.message } : {}
     ui.notifyError(error, 'Upload failed')
   } finally {
     busy.value = false
   }
+}
+
+function openExisting() {
+  emit('update:modelValue', false)
+  router.push({
+    name: 'document-viewer',
+    params: { documentId: duplicateOf.value.document_id },
+  })
 }
 </script>
 
@@ -166,6 +200,18 @@ async function submit() {
         </FormField>
       </div>
 
+      <div v-if="duplicateOf" class="upload__duplicate">
+        <p class="text-sm">
+          This file is already in this project, uploaded as
+          <strong>{{ duplicateOf.document_title }}</strong>.
+        </p>
+        <p class="text-xs text-muted">
+          Uploading it again indexes the same text twice, so it is returned twice in
+          search and cited twice in an answer. Open the existing document, or keep both
+          if they are genuinely different records.
+        </p>
+      </div>
+
       <div v-if="busy" class="upload__progress">
         <div class="upload__bar"><div class="upload__fill" :style="{ width: progress + '%' }" /></div>
         <p class="text-xs text-muted">Uploading {{ progress }}%</p>
@@ -174,12 +220,45 @@ async function submit() {
 
     <template #footer>
       <AppButton variant="ghost" label="Cancel" :disabled="busy" @click="emit('update:modelValue', false)" />
-      <AppButton variant="primary" label="Upload" :loading="busy" :disabled="!canSubmit" @click="submit" />
+      <template v-if="duplicateOf">
+        <AppButton
+          variant="ghost"
+          icon="pi pi-external-link"
+          label="Open the existing one"
+          :disabled="busy"
+          @click="openExisting"
+        />
+        <AppButton
+          variant="primary"
+          label="Upload anyway"
+          :loading="busy"
+          :disabled="!canSubmit"
+          @click="submit({ allowDuplicate: true })"
+        />
+      </template>
+      <AppButton
+        v-else
+        variant="primary"
+        label="Upload"
+        :loading="busy"
+        :disabled="!canSubmit"
+        @click="submit()"
+      />
     </template>
   </AppDialog>
 </template>
 
 <style scoped>
+.upload__duplicate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+}
+
 .upload__progress {
   display: flex;
   flex-direction: column;

@@ -54,6 +54,51 @@ def compute_checksum(handle: BinaryIO) -> str:
     return digest.hexdigest()
 
 
+def _refuse_duplicate_of_another_document(project: Project, checksum: str, exclude) -> None:
+    """Stop the same file being uploaded a second time as a new document.
+
+    The existing check only looked at the document being uploaded *to*, so
+    re-uploading a file under a new title sailed through — which is how one
+    installation acquired the Silver Book three times and the Yellow Book
+    twice, each copy separately chunked, embedded and returned in search.
+
+    Refused rather than warned-and-written, because by the time a warning is
+    read the second copy is already indexed. The caller is told exactly which
+    document holds the file and may repeat the request with
+    ``allow_duplicate`` when both copies are genuinely wanted.
+    """
+    existing = (
+        DocumentVersion.objects.filter(
+            document__project=project,
+            checksum_sha256=checksum,
+            document__deleted_at__isnull=True,
+        )
+        .exclude(document=exclude)
+        .select_related("document")
+        .order_by("created_at")
+        .first()
+    )
+    if existing is None:
+        return
+
+    raise ConflictError(
+        "This file is already in this project, uploaded as "
+        f"\u201c{existing.document.title}\u201d.",
+        details={
+            "reason": "duplicate_of_another_document",
+            "document_id": str(existing.document_id),
+            "document_title": existing.document.title,
+            "document_type": existing.document.document_type,
+            "version_number": existing.version_number,
+            "uploaded_at": existing.created_at.isoformat(),
+            "remedy": (
+                "Open the existing document, or upload again with "
+                "allow_duplicate set if both copies are wanted."
+            ),
+        },
+    )
+
+
 def upload_document(
     *,
     project: Project,
@@ -64,6 +109,7 @@ def upload_document(
     reference: str = "",
     document_date=None,
     replaces_document_id: str | None = None,
+    allow_duplicate: bool = False,
 ) -> UploadResult:
     """Validate, store and queue an uploaded document.
 
@@ -77,13 +123,17 @@ def upload_document(
         document_date: Date on the document itself, not the upload date.
         replaces_document_id: When set, this becomes a new version of that
             document rather than a new document.
+        allow_duplicate: Proceed even though the same bytes are already in the
+            project under another document. The caller has been told which one
+            and has decided to keep both.
 
     Raises:
         ValidationError: unknown document type.
         FileSafetyError / UnsupportedMediaTypeError / PayloadTooLargeError:
             the file failed validation.
         ConflictError: byte-identical content already exists on the target
-            document.
+            document, or elsewhere in the project and ``allow_duplicate`` is
+            not set.
     """
     if not DEFAULT_TAXONOMY.has(document_type):
         raise ValidationError(
@@ -143,6 +193,9 @@ def upload_document(
                     "existing_version": duplicate.version_number,
                 },
             )
+
+        if is_new_document and not allow_duplicate:
+            _refuse_duplicate_of_another_document(project, checksum, document)
 
         previous = DocumentVersion.objects.filter(document=document).order_by(
             "-version_number"

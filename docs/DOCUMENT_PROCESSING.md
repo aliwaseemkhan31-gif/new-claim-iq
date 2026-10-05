@@ -2,11 +2,13 @@
 
 > **Status.** The pipeline is wired end to end. Clause detection, chunking,
 > upload safety, the stage machine and quality scoring are implemented and
-> tested (160 tests). Stage executors, providers, `ProcessingJob` persistence
-> and Celery tasks are written but **not runtime-verified** — they need
-> Python 3.12 and PostgreSQL, which the build host does not have. Table
-> extraction and embedding are not implemented and are handled as unavailable
-> capabilities rather than as failures; see §Capability-conditional stages.
+> covered by the pure-domain suite (see `docs/TESTING.md` for how to run it and
+> for the current count). Table extraction and embedding **are** implemented;
+> both remain capability-conditional, so a deployment without the capability
+> records them as `SKIPPED` rather than failing — see
+> §Capability-conditional stages. Stage executors, providers, `ProcessingJob`
+> persistence and Celery tasks need PostgreSQL and Redis to exercise, and the
+> integration suite does not yet cover them end to end.
 
 ## Why this is not "extract text and split every N characters"
 
@@ -37,10 +39,10 @@ UPLOAD
   → OCR                 conditional — docTR, page-ranged and resumable
   → CLASSIFY_PAGES      content vs contents/index/front matter
   → DETECT_CLAUSES      headings, hierarchy, cross-references
-  → EXTRACT_TABLES      conditional — not implemented, skipped as unavailable
+  → EXTRACT_TABLES      conditional — pdfplumber, digital pages with tables
   → ASSEMBLE_SECTIONS   persists the DocumentSection tree
   → CHUNK               clause-boundary respecting
-  → EMBED               conditional — not implemented, skipped as unavailable
+  → EMBED               conditional — needs a configured embedding provider
   → INDEX               tsvector for lexical retrieval
   → VALIDATE_QUALITY    scores the extraction, flags low-confidence documents
 ```
@@ -75,9 +77,10 @@ Three stages are conditional. `OCR` depends on a *document* fact — are there
 scanned pages. `EXTRACT_TABLES` and `EMBED` depend on a *deployment* fact —
 is the capability available at all.
 
-Table extraction and embedding are not implemented in this release. They are
-recorded as `SKIPPED` with an explicit reason rather than failing the pipeline
-or quietly succeeding:
+Both are implemented. Each is still skipped when the deployment cannot run it
+— no embedding provider configured, or no digital page carrying a table — and
+that is recorded as `SKIPPED` with an explicit reason rather than failing the
+pipeline or quietly succeeding:
 
 ```
 skip_reason: "no embedding provider is configured; the document is

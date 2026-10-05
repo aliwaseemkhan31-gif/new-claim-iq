@@ -19,7 +19,9 @@ from claimiq.ingestion.domain.clause_detection import (
     detect_citations,
     detect_headings,
     is_contents_line,
+    looks_like_table_row,
     normalise_clause_number,
+    numeric_profile,
     parent_of,
 )
 
@@ -385,3 +387,127 @@ def test_line_leading_headings_are_unaffected() -> None:
     page = PageText(page_number=1, text="20.2.1 Notice of Claim\nThe Contractor shall give a Notice.")
     headings, _skipped = detect_headings([page])
     assert [(h.number, h.title) for h in headings] == [("20.2.1", "Notice of Claim")]
+
+
+# ---------------------------------------------------------------------------
+# Table rows read as clause headings
+#
+# A priced table row is structurally identical to a clause heading: a
+# line-leading number, then text that is short, title-cased and has no full
+# stop. Every heuristic in the scorer rates it well, and it scored 0.55 against
+# a 0.55 threshold — so the nine-page cost annex of the Jaglot-Skardu claim
+# produced 128 "clause headings", and 136 of its 137 chunks were flagged as
+# complete clauses. Search and citations were polluted with clauses that do not
+# exist.
+#
+# The rows below are verbatim from that annex, as OCR reads them.
+# ---------------------------------------------------------------------------
+
+JAGLOT_BILL_OF_QUANTITIES = """Anx - A
+Cost Effect Land Slides and Mudflow Damages - JSR Proj
+Sr.No Description A/U Qty Rate (Rs) Amount (Rs) Remarks
+1 Excavate surplus Unclassified rock material Cuml 38220.46 814.92 31,146,613
+2 AggregateBase Cum 647.72 2602.7 1,685,808
+3 Prime Coat Sm 4233.60 116.24 492,114
+4 Asphaltic Base CoursePlant mix(Class B) Cum 338.69 19336.03 6,548,881
+5 TackCoat Sm 4233.60 54.88 232,340
+8 Concrete ClassA1(Shoulders) Cum 18.75 11600.73 217,514
+10 RetaingWall StoneMasonary Cum 4801.14 4984.56 23,931,570
+14 MetalGuardRail Mtr 1065.00 5661.4 6,029,391
+15 SteelPostforGuardRail Nos 550.00 6728.02 3,700,411
+"""
+
+JAGLOT_MEASUREMENT_SHEET = """Anx-B
+Detail of Landslides and Mudflow Damages JSR Proj
+MeasurementSheet
+Ser Item From RD To Length (Mtr) Width Avg Hight Avg (Cum) Qty Remarks
+1 Landslides 010+500 010+650 150.00 4.00 0.80 480.00
+2 Mudflow 017+390 017+425 35.00 3.65 0.50 63.88
+12 Mudflow+Boulders 042+985 043+015 30.00 10.50 1.75 551.25
+19 Mudflow 047+615 047+785 170.00 13.00 7.00 15470.00
+24 Landslides 079+525 079+675 150.00 10.00 7.00 10500.00
+"""
+
+
+def test_a_bill_of_quantities_yields_no_clauses() -> None:
+    """The defect, in one assertion."""
+    headings, _skipped = detect_headings(
+        [PageText(page_number=1, text=JAGLOT_BILL_OF_QUANTITIES)]
+    )
+    assert [h.title for h in headings] == []
+
+
+def test_a_measurement_sheet_yields_no_clauses() -> None:
+    headings, _skipped = detect_headings(
+        [PageText(page_number=2, text=JAGLOT_MEASUREMENT_SHEET)]
+    )
+    assert [h.title for h in headings] == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "2 AggregateBase Cum 647.72 2602.7 1,685,808",
+        "3 Prime Coat Sm 4233.60 116.24 492,114",
+        "15 SteelPostforGuardRail Nos 550.00 6728.02 3,700,411",
+        "1 Landslides 010+500 010+650 150.00 4.00 0.80 480.00",
+        "19 Mudflow 047+615 047+785 170.00 13.00 7.00 15470.00",
+    ],
+)
+def test_individual_table_rows_are_rejected(row: str) -> None:
+    headings, _skipped = detect_headings([PageText(page_number=1, text=row)])
+    assert headings == []
+
+
+@pytest.mark.parametrize(
+    "line,number,title",
+    [
+        ("20.2.1 Notice of Claim", "20.2.1", "Notice of Claim"),
+        ("14.3 Application for Interim Payment", "14.3", "Application for Interim Payment"),
+        ("8.5 Extension of Time for Completion", "8.5", "Extension of Time for Completion"),
+        ("53.1 Notice of Claims", "53.1", "Notice of Claims"),
+        ("4.1 Impartiality", "4.1", "Impartiality"),
+    ],
+)
+def test_real_clause_headings_survive(line: str, number: str, title: str) -> None:
+    """The rejection must cost nothing in the standard forms themselves.
+
+    Measured on the published books: the 1987 Red Book yields the same 107
+    headings before and after, and the only lines the 2017 Red Book, Yellow
+    Book and Silver Book lose are flowchart cross-reference lists — which were
+    never headings.
+    """
+    headings, _skipped = detect_headings([PageText(page_number=1, text=line)])
+    assert [(h.number, h.title) for h in headings] == [(number, title)]
+
+
+def test_a_heading_may_still_state_one_figure() -> None:
+    """A clause heading naming a period or a percentage is not a table row."""
+    page = PageText(page_number=1, text="14.2 Advance Payment of 10 per cent")
+    headings, _skipped = detect_headings([page])
+    assert [h.title for h in headings] == ["Advance Payment of 10 per cent"]
+
+
+def test_a_table_row_is_recognised_on_its_own() -> None:
+    """The predicate is public so a disputed extraction can be explained."""
+    assert looks_like_table_row("AggregateBase Cum 647.72 2602.7 1,685,808")
+    assert looks_like_table_row("Mudflow 017+390 017+425 35.00 3.65 0.50 63.88")
+    assert not looks_like_table_row("Claims for Payment and/or EOT")
+    assert not looks_like_table_row("Notice of Claim")
+
+
+def test_quantities_are_counted_but_words_are_not() -> None:
+    count, ratio = numeric_profile("AggregateBase Cum 647.72 2602.7 1,685,808")
+    assert count == 3
+    assert ratio == pytest.approx(3 / 5)
+    assert numeric_profile("Agreement or Determination") == (0, 0.0)
+
+
+def test_a_bill_of_quantities_page_is_still_content() -> None:
+    """Its rows are not clauses, but its figures are the claim's quantum.
+
+    Classification drives chunking as well as heading detection, so excluding
+    the page here would drop the costs being claimed out of retrieval
+    altogether — a worse failure than the one being fixed.
+    """
+    assert classify_page(PageText(page_number=1, text=JAGLOT_BILL_OF_QUANTITIES)) is True

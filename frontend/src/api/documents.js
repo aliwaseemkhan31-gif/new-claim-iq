@@ -29,6 +29,7 @@ export function uploadDocument({
   reference,
   documentDate,
   replaces,
+  allowDuplicate = false,
   onProgress,
 }) {
   const form = new FormData()
@@ -39,6 +40,9 @@ export function uploadDocument({
   if (reference) form.append('reference', reference)
   if (documentDate) form.append('document_date', documentDate)
   if (replaces) form.append('replaces', replaces)
+  // Only sent on a second attempt, after the server has named the document
+  // that already holds these bytes and the user has chosen to keep both.
+  if (allowDuplicate) form.append('allow_duplicate', 'true')
 
   return post('/documents/', form, {
     headers: { 'Content-Type': 'multipart/form-data' },

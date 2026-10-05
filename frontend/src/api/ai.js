@@ -9,12 +9,24 @@ import { get, post } from './client'
 /** Local generation on CPU takes tens of seconds; the default 30 s is too short. */
 const GENERATION_TIMEOUT_MS = 10 * 60 * 1000
 
-export function ask({ question, projectId, includeKnowledgeBase = true, documentTypes } = {}, config = {}) {
+/**
+ * Ask a grounded question.
+ *
+ * Either about a project — its documents, optionally alongside the form that
+ * governs it — or about a standard form on its own, by naming `edition` and no
+ * project. The second answers "what does the Red Book require" without a job
+ * to hang the question on.
+ */
+export function ask(
+  { question, projectId, edition, includeKnowledgeBase = true, documentTypes } = {},
+  config = {}
+) {
   return post(
     '/ai/ask/',
     {
       question,
-      project: projectId,
+      project: projectId || null,
+      edition: edition || null,
       include_knowledge_base: includeKnowledgeBase,
       document_types: documentTypes,
     },
@@ -22,8 +34,17 @@ export function ask({ question, projectId, includeKnowledgeBase = true, document
   )
 }
 
-export function listQuestions(projectId, params = {}, config = {}) {
-  return get('/ai/questions/', { params: { project: projectId, ...params }, ...config })
+/**
+ * Earlier questions, scoped to one project or to one standard-form edition.
+ *
+ * The two histories are kept apart: a project's questions are confidential to
+ * it, and a reading of the standard form is not.
+ */
+export function listQuestions({ projectId, edition } = {}, params = {}, config = {}) {
+  return get('/ai/questions/', {
+    params: projectId ? { project: projectId, ...params } : { edition, ...params },
+    ...config,
+  })
 }
 
 export function fetchQuestion(questionId, config = {}) {

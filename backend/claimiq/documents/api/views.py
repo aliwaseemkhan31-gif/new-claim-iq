@@ -195,6 +195,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
             reference=request.data.get("reference", ""),
             document_date=request.data.get("document_date") or None,
             replaces_document_id=request.data.get("replaces") or None,
+            allow_duplicate=str(request.data.get("allow_duplicate", "")).lower()
+            in ("1", "true", "yes", "on"),
         )
 
         return Response(

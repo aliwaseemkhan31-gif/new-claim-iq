@@ -158,6 +158,48 @@ def resolve_access(
     )
 
 
+def holds_in_any_project(
+    user: User,
+    *,
+    organization_id: UUID,
+    organization_role: str | None,
+    permission: str,
+) -> bool:
+    """True when ``permission`` is held on at least one project in the org.
+
+    Some actions are organization-wide but gated on a project permission,
+    because the permission describes a capability rather than a place: asking a
+    question of a standard form reads no project, but only someone trusted to
+    put questions to the model on *some* project should be able to spend the
+    model's time on it.
+
+    One query, over the user's project roles, rather than resolving an access
+    context per accessible project.
+    """
+    if organization_role is None:
+        return False
+
+    if organization_role == ROLE_SYSTEM_ADMINISTRATOR.code:
+        from claimiq.accounts.domain.permissions import ROLE_PROJECT_MANAGER
+
+        return permission in resolve_permissions(
+            organization_role, ROLE_PROJECT_MANAGER.code
+        )
+
+    roles = set(
+        ProjectMember.objects.filter(
+            user=user,
+            is_active=True,
+            project__organization_id=organization_id,
+            project__deleted_at__isnull=True,
+        ).values_list("role", flat=True)
+    )
+    # The organization role alone may already carry it; check that too, so a
+    # user with no project membership is judged on the same basis.
+    roles.add(None)
+    return any(permission in resolve_permissions(organization_role, role) for role in roles)
+
+
 def cached_access(
     user: User,
     *,
