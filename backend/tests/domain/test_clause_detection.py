@@ -221,6 +221,26 @@ def test_integers_alone_are_not_references() -> None:
     assert [c for c in citations if not c.is_explicit] == []
 
 
+def test_the_decimal_tail_of_a_money_amount_is_not_a_reference() -> None:
+    """"Rs. 1,234.56" was emitted as a cross-reference to clause 234.56.
+
+    The thousands separator is neither a word character nor a dot, so the
+    bare-reference pattern entered the amount at its decimal tail. Every sum
+    on a payment page became a reference to a clause that does not exist.
+    """
+    page = PageText(
+        page_number=3,
+        text="A sum of Rs. 1,234.56 was certified and 12,000.75 remains due.",
+    )
+    assert detect_citations([page]) == []
+
+
+def test_references_separated_by_commas_are_still_read() -> None:
+    """The guard above must not cost the ordinary way a list of clauses is written."""
+    page = PageText(page_number=3, text="under 20.1, 20.2 and 20.3 the Contractor shall act.")
+    assert [c.number for c in detect_citations([page])] == ["20.1", "20.2", "20.3"]
+
+
 # ---------------------------------------------------------------------------
 # Hierarchy — the missing-structure fix
 # ---------------------------------------------------------------------------
@@ -373,6 +393,39 @@ def test_clause_number_after_a_marginal_note_is_detected() -> None:
     assert heading.title == "Substantiation"
     # The provision starts at its number, not at the marginal note.
     assert MARGIN_PAGE[heading.char_offset :].startswith("53.3 Within 28 days")
+
+
+@pytest.mark.parametrize(
+    "newline",
+    ["\n", "\r\n", "\r", " ", "\x0b", "\x0c"],
+    ids=["lf", "crlf", "cr", "line_separator", "vertical_tab", "form_feed"],
+)
+def test_heading_offset_indexes_the_raw_page_whatever_the_line_ending(newline: str) -> None:
+    """Offsets assumed every line ended in one character.
+
+    CRLF text therefore drifted one character further left per line, and
+    chunking slices the page with these offsets: clause boundaries landed
+    mid-word and the viewer highlighted the wrong provision, progressively
+    worse down the page. Office and plain-text extraction pass the decoded
+    bytes through without normalising newlines, so this reaches real
+    documents.
+    """
+    body = "The Contractor shall give notice to the Engineer within 28 days."
+    text = newline.join(
+        ["20.1 Claims", body, "20.2 Notice of Claim", body, "20.3 Evidence", body]
+    )
+    headings, _skipped = detect_headings([PageText(page_number=1, text=text)])
+    assert [h.number for h in headings] == ["20.1", "20.2", "20.3"]
+    for heading in headings:
+        assert text[heading.char_offset :].startswith(heading.number)
+
+
+def test_marginal_heading_offset_survives_crlf() -> None:
+    """The inline-number path adds a within-line offset to the line's start."""
+    text = MARGIN_PAGE.replace("\n", "\r\n")
+    headings, _skipped = detect_headings([PageText(page_number=32, text=text)])
+    assert [h.number for h in headings] == ["53.3"]
+    assert text[headings[0].char_offset :].startswith("53.3 Within 28 days")
 
 
 def test_prose_beginning_with_a_clause_reference_is_not_a_marginal_heading() -> None:

@@ -74,6 +74,44 @@ def test_a_row_of_a_summary_table_is_refused_rather_than_run_together() -> None:
 def test_amounts_written_in_millions_are_read() -> None:
     assert normalise_amount("9.828 Mn")[0] == Decimal("9828000.000")
     assert normalise_amount("Amount in Mn 9.828")[0] == Decimal("9828000.000")
+    assert normalise_amount("9.828 (Mn)")[0] == Decimal("9828000.000")
+    assert normalise_amount("USD 1.5 Billion")[0] == Decimal("1500000000.0")
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            "Rs. 84,565,309 (Rupees Eighty Four Million Five Hundred Sixty Five "
+            "Thousand Three Hundred Nine Only)",
+            Decimal("84565309"),
+        ),
+        (
+            "Rs. 2,500,000 (Two Million Five Hundred Thousand Rupees Only)",
+            Decimal("2500000"),
+        ),
+        ("PKR 91,484,000 (Ninety One Million Four Hundred Eighty Four Thousand)", Decimal("91484000")),
+    ],
+)
+def test_an_amount_restated_in_words_is_not_multiplied_again(text: str, expected: Decimal) -> None:
+    """This returned 84,565,309,000,000 — the claimed sum times a million.
+
+    Nearly every claim letter writes the amount twice, in figures and then in
+    words in brackets. The multiplier word was looked for anywhere in the
+    string, so "Million" inside the written-out restatement scaled a figure
+    that was already complete. The note came back empty, so nothing marked it
+    for the reviewer.
+    """
+    amount, note = normalise_amount(text)
+    assert amount == expected
+    assert note == ""
+
+
+def test_a_multiplier_still_applies_when_it_follows_the_figure_and_words_follow_it() -> None:
+    """The multiplier is honoured where it is attached, not merely present."""
+    amount, note = normalise_amount("Rs 9.828 Mn (Nine Point Eight Two Eight Million Rupees)")
+    assert amount == Decimal("9828000.000")
+    assert note == ""
 
 
 def test_decimals_and_plain_numbers_are_read() -> None:

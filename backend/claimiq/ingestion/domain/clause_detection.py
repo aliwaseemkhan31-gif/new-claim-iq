@@ -58,8 +58,17 @@ _KEYWORD_REF_RE = re.compile(
 )
 
 #: A bare dotted number appearing inside running text: "under 20.2.1,".
-#: Requires at least one dot, so plain integers and money amounts are excluded.
-_BARE_REF_RE = re.compile(r"(?<![\w.])(?P<number>\d{1,3}(?:\.\d{1,3}){1,4})(?![\w.])")
+#: Requires at least one dot, so plain integers are excluded.
+#:
+#: The second lookbehind rejects the decimal tail of a thousands-separated
+#: amount. ``1,234.56`` otherwise entered at the ``234.56``, because the comma
+#: before it is neither a word character nor a dot, and every sum on a payment
+#: page was emitted as a cross-reference to a clause that does not exist. A
+#: comma directly before a genuine reference ("Clauses 20.1,20.2", with no
+#: space) is the only thing given up, and it is far rarer than money is.
+_BARE_REF_RE = re.compile(
+    r"(?<![\w.])(?<!\d,)(?P<number>\d{1,3}(?:\.\d{1,3}){1,4})(?![\w.])"
+)
 
 #: Dot leaders, the signature of a contents page: "Definitions ......... 12".
 _DOT_LEADER_RE = re.compile(r"[.·…]{4,}[ \t]*\d{1,4}[ \t]*$")
@@ -405,6 +414,22 @@ def classify_page(page: PageText) -> bool:
     return True
 
 
+def _iter_lines(text: str) -> Iterable[tuple[str, str]]:
+    """Yield ``(line, line_with_terminator)`` for each line of ``text``.
+
+    A heading's ``char_offset`` has to index the raw page text, because
+    chunking slices the page with it and the viewer highlights with it. The
+    obvious ``len(line) + 1`` assumes every line ends in one character, which
+    CRLF text breaks: the cut drifted one character further left per line, so
+    on a Windows-authored document the clause boundaries landed mid-word and
+    the highlight pointed at the wrong provision. ``splitlines(keepends=True)``
+    splits at exactly the same places as ``splitlines()`` while keeping each
+    terminator, so the real width is available without normalising the text or
+    guessing which of the eight line separators Python recognises was used.
+    """
+    return zip(text.splitlines(), text.splitlines(keepends=True))
+
+
 def _score_heading(number: str, title: str, keyword: str | None, line: str) -> float:
     """Confidence that a candidate line is a genuine clause heading.
 
@@ -531,7 +556,13 @@ def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], lis
             continue
 
         offset = 0
-        for line_index, line in enumerate(page.text.splitlines()):
+        for line_index, (line, raw_line) in enumerate(_iter_lines(page.text)):
+            line_start = offset
+            # Advanced here, before any branch, so the `continue` below cannot
+            # skip it. ``raw_line`` carries its own terminator, so the offset
+            # stays in raw-page coordinates whatever the line ending is.
+            offset += len(raw_line)
+
             match = _HEADING_RE.match(line)
             if match:
                 number = normalise_clause_number(match.group("number"))
@@ -546,12 +577,11 @@ def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], lis
                                 title=title,
                                 page_number=page.page_number,
                                 line_index=line_index,
-                                char_offset=offset,
+                                char_offset=line_start,
                                 confidence=round(confidence, 3),
                                 depth=clause_depth(number),
                             )
                         )
-                        offset += len(line) + 1
                         continue
 
             # The number may sit inline after a marginal note instead.
@@ -572,13 +602,11 @@ def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], lis
                                 line_index=line_index,
                                 # The provision starts at its number, not at the
                                 # marginal note, so chunking splits there.
-                                char_offset=offset + margin.start("number"),
+                                char_offset=line_start + margin.start("number"),
                                 confidence=round(confidence, 3),
                                 depth=clause_depth(number),
                             )
                         )
-
-            offset += len(line) + 1
 
     return headings, skipped
 

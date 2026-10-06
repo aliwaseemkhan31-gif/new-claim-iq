@@ -137,6 +137,17 @@ _CLAUSE_KEYWORD_RE = re.compile(
 _AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
 _WS_RE = re.compile(r"\s+")
 
+#: A multiplier word written against the figure, on either side: "9.828 Mn",
+#: "9.828 (Mn)", "Amount in Mn 9.828". Both forms appear as column headings
+#: and as inline units on the cost summaries this reads.
+_MULTIPLIER_WORD = r"(?:mn|million|bn|billion)"
+_MULTIPLIER_AFTER_RE = re.compile(
+    r"^[ \t]*\(?(" + _MULTIPLIER_WORD + r")\b", re.IGNORECASE
+)
+_MULTIPLIER_BEFORE_RE = re.compile(
+    r"\b(" + _MULTIPLIER_WORD + r")\)?[ \t]*$", re.IGNORECASE
+)
+
 #: How a date may be written on a claim document.
 #:
 #: Day-first before month-first throughout: these are FIDIC contracts on
@@ -321,6 +332,27 @@ def normalise_date(value: Any) -> Tuple[Optional[date], str]:
     return None, "{!r} could not be read as a date.".format(text)
 
 
+def _attached_multiplier(text: str, start: int, end: int) -> Decimal:
+    """The multiplier word written against the figure at ``text[start:end]``.
+
+    The word has to touch the figure. Searching the whole string for
+    "million" read the figure-then-words-in-brackets form that nearly every
+    claim letter uses — "Rs. 84,565,309 (Rupees Eighty Four Million Five
+    Hundred Sixty Five Thousand Three Hundred Nine Only)" — as eighty-four
+    trillion, and returned it with an empty note, so nothing marked it for
+    the reviewer. The words in brackets restate the figure; they do not
+    scale it.
+    """
+    match = (
+        _MULTIPLIER_AFTER_RE.match(text[end:])
+        or _MULTIPLIER_BEFORE_RE.search(text[:start])
+    )
+    if not match:
+        return Decimal(1)
+    word = match.group(1).lower()
+    return Decimal(1_000_000_000) if word in ("bn", "billion") else Decimal(1_000_000)
+
+
 def normalise_amount(value: Any) -> Tuple[Optional[Decimal], str]:
     """Parse a money amount, which a claim document writes many ways.
 
@@ -340,23 +372,19 @@ def normalise_amount(value: Any) -> Tuple[Optional[Decimal], str]:
     if not text:
         return None, ""
 
-    lowered = text.lower()
-    multiplier = Decimal(1)
-    if re.search(r"\b(mn|million)\b", lowered):
-        multiplier = Decimal(1_000_000)
-    elif re.search(r"\b(bn|billion)\b", lowered):
-        multiplier = Decimal(1_000_000_000)
-
     # Match the number itself rather than stripping non-digits: a currency
     # prefix carries punctuation, and stripping all but digits and dots
     # turns "Rs. 84,565,309" into 0.84565309.
-    found = _AMOUNT_RE.findall(text)
-    if not found:
+    matches = list(_AMOUNT_RE.finditer(text))
+    if not matches:
         return None, "{!r} could not be read as an amount.".format(text)
     distinct = []
-    for candidate in found:
+    spans = {}
+    for match in matches:
+        candidate = match.group(0)
         if candidate not in distinct:
             distinct.append(candidate)
+            spans[candidate] = match.span()
     if len(distinct) > 1:
         # A row of a summary table, not one amount. Which of them is
         # claimed is the reviewer's to say; picking one here would put a
@@ -364,6 +392,7 @@ def normalise_amount(value: Any) -> Tuple[Optional[Decimal], str]:
         return None, (
             "Several amounts appear in {!r}: {}. Which is claimed is not clear from this text.".format(text, ", ".join(distinct))
         )
+    multiplier = _attached_multiplier(text, *spans[distinct[0]])
     digits = re.sub(r"[,\s]", "", distinct[0])
     try:
         amount = Decimal(digits) * multiplier

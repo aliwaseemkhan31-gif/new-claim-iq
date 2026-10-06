@@ -1,0 +1,100 @@
+{
+  "Contract Agreement \u2013 Jaglot-Skardu Road (Volume 1)": {
+    "cont": 0.2432,
+    "dropped_words": 0.0,
+    "junk": 0.4209,
+    "mid": 0.0359,
+    "missing": [],
+    "over": 0.0007,
+    "tiny": 0.3027
+  },
+  "Contract document \u2013 Indus Highway N-55 (ACW Sehwan\u2013Ratodero)": {
+    "cont": 0.3972,
+    "dropped_words": 0.0053,
+    "junk": 0.022,
+    "mid": 0.08,
+    "missing": [],
+    "over": 0.0055,
+    "tiny": 0.1793
+  },
+  "FIDIC Red Book 1987 (4th Edition)": {
+    "cont": 0.2176,
+    "dropped_words": 0.0954,
+    "junk": 0.0,
+    "mid": 0.1969,
+    "missing": [
+      "52.1",
+      "70.1"
+    ],
+    "over": 0.0155,
+    "tiny": 0.0725
+  },
+  "FIDIC Silver Book 1999 (1st Edition)": {
+    "cont": 0.2423,
+    "dropped_words": 0.1126,
+    "junk": 0.0159,
+    "mid": 0.366,
+    "missing": [
+      "1.9",
+      "13.1",
+      "13.7",
+      "17.4",
+      "19.1",
+      "19.2",
+      "19.4",
+      "20.1",
+      "20.4",
+      "8.4",
+      "8.5"
+    ],
+    "over": 0.0129,
+    "tiny": 0.1443
+  },
+  "FIDIC Yellow Book 2017": {
+    "cont": 0.2246,
+    "dropped_words": 0.3256,
+    "junk": 0.0069,
+    "mid": 0.2731,
+    "missing": [
+      "1.9",
+      "13.3.1",
+      "19.1",
+      "19.2",
+      "20.2",
+      "20.2.1",
+      "20.2.5",
+      "4.12.4",
+      "8.6"
+    ],
+    "over": 0.0228,
+    "tiny": 0.2398
+  },
+  "FIDIC Yellow Book 2017 (2nd Edition)": {
+    "cont": 0.2246,
+    "dropped_words": 0.3256,
+    "junk": 0.0069,
+    "mid": 0.2731,
+    "missing": [
+      "1.9",
+      "13.3.1",
+      "19.1",
+      "19.2",
+      "20.2",
+      "20.2.1",
+      "20.2.5",
+      "4.12.4",
+      "8.6"
+    ],
+    "over": 0.0228,
+    "tiny": 0.2398
+  },
+  "Jaglot-Skardu Road \u2013 Contract Claim": {
+    "cont": 0.0584,
+    "dropped_words": 0.0,
+    "junk": 1.0,
+    "mid": 0.0,
+    "missing": [],
+    "over": 0.0,
+    "tiny": 0.708
+  }
+}
