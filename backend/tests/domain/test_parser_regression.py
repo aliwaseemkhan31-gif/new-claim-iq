@@ -70,48 +70,39 @@ KEEP = [
         "gc_running_header",
         "General Conditions © FIDIC 2017\n4.12.2 Engineer’s inspection and investigation\n"
         "The Engineer shall inspect and investigate the physical conditions within 7 days after receiving the Notice.",
-        why="running header is read as a front-matter marker",
     ),
     case(
         "gc_title_then_clause_one",
         "General Conditions\n1\nGeneral Provisions\n1.1 Definitions\n"
         "In the Conditions of Contract the following words and expressions shall have the meanings stated.",
-        why="a lone 'General Conditions' line drops the page that starts Clause 1",
     ),
     case(
         "annex_with_evidence",
         "Annex A\nSchedule of Delay Events\nThe delay caused by the landslide of 12 July 2022 affected Section 3 of the Works for 41 days.",
-        why="first-line 'Annex' drops pages with real evidence",
     ),
     case(
         "appendix_site_records",
         "Appendix 2 Daily Site Records\nDate: 12 July 2022. Rain 120mm. No work possible on the embankment.",
-        why="first-line 'Appendix' drops pages with real evidence",
     ),
     case(
         "contents_of_the_notice",
         "Contents of the Notice\nThe notice shall describe the event and state the contractual basis of the claim.",
-        why="'Contents ' prefix matches a sentence heading",
     ),
     case(
         "index_linked_adjustment",
         "Index Linked Adjustment\nPrices shall be adjusted using the index published by the Bureau of Statistics.",
-        why="'Index ' prefix matches a sentence heading",
     ),
     case(
         "contents_colon_sentence",
         "Contents: the Contractor shall submit the list of materials.\nMore provision text follows on this page.",
-        why="'Contents:' prefix matches a sentence",
     ),
     case(
         "table_with_trailing_integers",
         "\n".join(f"{i} Item description number {i}   {i * 3}" for i in range(1, 15)),
-        why="trailing integers make a table look like a contents page",
     ),
     case(
         "schedule_with_trailing_integers",
         "\n".join(f"Section {i} Completion Date   {i + 10}" for i in range(1, 10)),
-        why="trailing integers make a schedule look like a contents page",
     ),
     case(
         "claim_letter_annex_reference",
@@ -562,6 +553,5 @@ def test_pdf_hyphenated_word_is_rejoined(pdf_pages):
     assert "notice within this period" in flat(pdf_pages[0])
 
 
-@fault("ruled table rows are read as clause headings")
 def test_pdf_table_rows_are_not_headings(pdf_pages):
     assert nums(pdf_pages[1]) == ["20.3"]

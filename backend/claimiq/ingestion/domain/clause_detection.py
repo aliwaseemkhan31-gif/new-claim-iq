@@ -73,8 +73,24 @@ _BARE_REF_RE = re.compile(
 #: Dot leaders, the signature of a contents page: "Definitions ......... 12".
 _DOT_LEADER_RE = re.compile(r"[.·…]{4,}[ \t]*\d{1,4}[ \t]*$")
 
-#: A line ending in a bare page number, the other contents-page signature.
-_TRAILING_PAGENO_RE = re.compile(r"[A-Za-z’')\]][ \t]{2,}(\d{1,4})[ \t]*$")
+#: A numbered entry ending in a bare page number, the other contents-page
+#: signature: "20.2.1  Notice of Claim    145".
+#:
+#: The leading clause number is required. Without it the rule fired on any
+#: line ending in a figure after a wide gap, which is how a schedule —
+#: "Section 1 Completion Date   11", repeated down the page — was read as a
+#: contents page and dropped whole. A contents entry exists to map a numbered
+#: heading to a page; a line that names no clause is not one.
+#:
+#: What this gives up is an unnumbered contents page set without dot leaders
+#: ("Definitions        5"). Those are rare in a contract, whose contents page
+#: is a clause index by construction, and dot leaders still catch most of
+#: them — whereas a schedule of rows ending in a figure is common, and
+#: dropping one costs a whole page of evidence.
+_NUMBERED_PAGENO_RE = re.compile(
+    r"^[ \t]*\d{1,3}(?:\.\d{1,3}){0,3}[ \t]+"
+    r"(?P<title>[^\n]*[A-Za-z’')\]])[ \t]{2,}\d{1,4}[ \t]*$"
+)
 
 #: A numbered contents entry whose page number follows a single space:
 #: "16.1 Contractor's Employees 8". Structurally identical to a heading, so it
@@ -127,6 +143,24 @@ _TABLE_ROW_MIN_NUMBERS = 2
 #: …or a title that is substantially made of quantities, which catches a short
 #: row like "7 Mudflow 047+135 50.00".
 _TABLE_ROW_NUMERIC_RATIO = 0.34
+
+#: Words a title lower-cases by convention, so their case says nothing about
+#: whether the line is a heading. "Engineer at Liberty to Object" is as
+#: title-cased as "Notice of Claim"; counting "at", "to" and "of" against them
+#: would read both as running prose.
+_TITLE_STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on",
+        "or", "the", "to", "under", "with",
+    }
+)
+
+#: How much of a contents entry's title must be capitalised. A contents entry
+#: reproduces a heading, and a heading is title-cased; a table row's
+#: description is not. This is the only thing separating "1 Some General
+#: Title 1   2" (a contents entry) from "1 Item description number 1   3" (a
+#: row of a table), which are otherwise the same shape.
+_CONTENTS_TITLE_CAPS_RATIO = 0.6
 
 #: Tokens that mark a line as front/back matter rather than conditions text.
 _NON_CONTENT_MARKERS = (
@@ -244,6 +278,11 @@ HEADING_MIN_CONFIDENCE = 0.55
 _TOC_PAGE_RATIO = 0.30
 _TOC_PAGE_MIN_HITS = 4
 
+#: The same, for a page topped by a front-matter marker. A short index —
+#: "INDEX OF SUB-CLAUSES" over two entries — never reaches four, and its
+#: title is the evidence that makes two enough.
+_TOC_PAGE_MIN_HITS_MARKED = 2
+
 
 def normalise_clause_number(raw: str) -> str:
     """Normalise a clause number to canonical dotted form.
@@ -286,25 +325,69 @@ def is_contents_line(line: str) -> bool:
     precisely how the legacy 2017 knowledge base acquired 422 contaminated
     chunks.
 
+    Both forms require a leading clause number and a title that reads like a
+    heading. Neither requirement was there before, and between them they
+    dropped two kinds of page whole: a schedule whose rows end in a figure,
+    and a table whose rows are numbered and end in a quantity. Both are
+    shaped exactly like a contents entry; what tells them apart is that a
+    contents entry reproduces a heading, so it is title-cased and carries no
+    quantities.
+
     >>> is_contents_line("1.1 Definitions ................ 12")
     True
     >>> is_contents_line("20.2.1  Notice of Claim    145")
     True
     >>> is_contents_line("20.2.1 Notice of Claim")
     False
+    >>> is_contents_line("1 Item description number 1   3")
+    False
+    >>> is_contents_line("Section 1 Completion Date   11")
+    False
     """
     stripped = line.rstrip()
     if not stripped:
         return False
+    # Dot leaders are unambiguous: nothing but a contents page sets them.
     if _DOT_LEADER_RE.search(stripped):
         return True
-    if _TRAILING_PAGENO_RE.search(stripped):
-        return True
-    if len(stripped) <= 110:
-        entry = _CONTENTS_ENTRY_RE.match(stripped)
-        if entry and not entry.group("title").rstrip().endswith((".", ",", ";", ":")):
-            return True
-    return False
+    if len(stripped) > 110:
+        return False
+    entry = _CONTENTS_ENTRY_RE.match(stripped) or _NUMBERED_PAGENO_RE.match(stripped)
+    if not entry:
+        return False
+    title = entry.group("title").rstrip()
+    if title.endswith((".", ",", ";", ":")):
+        return False
+    return reads_as_a_heading_title(title)
+
+
+def reads_as_a_heading_title(title: str) -> bool:
+    """True if ``title`` is written the way a clause heading is written.
+
+    Separated out so the judgement can be inspected on its own, the way
+    :func:`numeric_profile` is. Quantities and the words a title lower-cases
+    by convention are both excluded before the ratio is taken: counting them
+    read "Engineer at Liberty to Object" as prose and "Item description
+    number 1" as a heading, which is backwards on both.
+
+    >>> reads_as_a_heading_title("Engineer at Liberty to Object")
+    True
+    >>> reads_as_a_heading_title("Item description number 1")
+    False
+    """
+    if looks_like_table_row(title):
+        return False
+    words = [w for w in re.split(r"[ \t]+", title.strip()) if w]
+    content = [
+        w
+        for w in words
+        if not _is_quantity_token(w)
+        and w.lower().strip(".,;:()'’") not in _TITLE_STOPWORDS
+    ]
+    if not content:
+        return False
+    capitalised = sum(1 for w in content if w[:1].isupper())
+    return capitalised / len(content) >= _CONTENTS_TITLE_CAPS_RATIO
 
 
 def _is_quantity_token(token: str) -> bool:
@@ -383,9 +466,16 @@ def looks_like_table_row(title: str) -> bool:
 
 
 def _is_structural_marker(line: str) -> bool:
-    """True if the line is a front/back-matter section marker."""
+    """True if the line is a front/back-matter section marker.
+
+    A marker is a page title, so it is short and does not close a sentence.
+    Without the punctuation test "Contents: the Contractor shall submit the
+    list of materials." was a marker, because it begins with one of the words.
+    """
     low = line.strip().lower()
     if not low or len(low) > 60:
+        return False
+    if low.endswith((".", ";")):
         return False
     for marker in _NON_CONTENT_MARKERS:
         if low == marker or low.startswith(marker + " ") or low.startswith(marker + ":"):
@@ -396,22 +486,36 @@ def _is_structural_marker(line: str) -> bool:
 def classify_page(page: PageText) -> bool:
     """Return True if the page should be treated as body content.
 
-    A page is excluded when a meaningful share of its non-empty lines are
-    contents-style entries, or when it is topped by a front-matter marker.
+    A page is excluded on the share of its lines that are contents entries,
+    never on what its first line begins with. The marker words only lower the
+    number of entries required, and cannot drop a page on their own.
+
+    Deciding on the first line was the single most expensive defect in this
+    module. "General Conditions" is the running header of every even page of
+    the FIDIC 2017 forms, so the rule fired on a third of the book: 73 of the
+    Yellow Book's 231 pages were classified as front matter and never
+    indexed, taking Sub-Clauses 20.2, 20.2.1 and 20.2.5 — the notice-of-claim
+    provisions the product exists to answer on — out of the knowledge base
+    altogether. The same rule dropped any page opening with "Annex" or
+    "Appendix", which on a claim submission is where the evidence is.
+
+    A marker still means something: it is what separates a four-line index
+    from a body page that happens to carry two contents-like lines. So it
+    halves the evidence needed, and nothing more.
     """
     lines = [ln for ln in page.text.splitlines() if ln.strip()]
     if not lines:
         return False
 
-    for line in lines[:3]:
-        if _is_structural_marker(line):
-            return False
-
     toc_hits = sum(1 for ln in lines if is_contents_line(ln))
-    if toc_hits >= _TOC_PAGE_MIN_HITS and toc_hits / len(lines) >= _TOC_PAGE_RATIO:
-        return False
+    if not toc_hits:
+        return True
+    if toc_hits / len(lines) < _TOC_PAGE_RATIO:
+        return True
 
-    return True
+    marked = any(_is_structural_marker(ln) for ln in lines[:3])
+    minimum = _TOC_PAGE_MIN_HITS_MARKED if marked else _TOC_PAGE_MIN_HITS
+    return toc_hits < minimum
 
 
 def _iter_lines(text: str) -> Iterable[tuple[str, str]]:

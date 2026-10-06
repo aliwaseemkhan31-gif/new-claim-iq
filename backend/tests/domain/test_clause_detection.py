@@ -383,6 +383,99 @@ def test_a_contents_page_is_excluded_from_body_content() -> None:
     assert classify_page(PageText(page_number=4, text=CONTENTS_PAGE)) is False
 
 
+# ---------------------------------------------------------------------------
+# Page classification decides on the share of contents lines, not the first
+# line. Deciding on the first line dropped 73 of the Yellow Book's 231 pages.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The running header of every even page of the FIDIC 2017 forms. This
+        # one line took Sub-Clauses 20.2, 20.2.1 and 20.2.5 out of the
+        # knowledge base.
+        "General Conditions © FIDIC 2017\n"
+        "4.12.2 Engineer's inspection and investigation\n"
+        "The Engineer shall inspect and investigate the physical conditions "
+        "within 7 days after receiving the Notice.",
+        # The page on which Clause 1 begins, under the form's own title.
+        "General Conditions\n1\nGeneral Provisions\n1.1 Definitions\n"
+        "In the Conditions of Contract the following words and expressions "
+        "shall have the meanings stated.",
+        # On a claim submission, the annexes are where the evidence is.
+        "Annex A\nSchedule of Delay Events\n"
+        "The delay caused by the landslide of 12 July 2022 affected Section 3 "
+        "of the Works for 41 days.",
+        "Appendix 2 Daily Site Records\n"
+        "Date: 12 July 2022. Rain 120mm. No work possible on the embankment.",
+        # A provision that merely opens with one of the marker words.
+        "Contents of the Notice\n"
+        "The notice shall describe the event and state the contractual basis "
+        "of the claim.",
+        "Index Linked Adjustment\n"
+        "Prices shall be adjusted using the index published by the Bureau of "
+        "Statistics.",
+    ],
+    ids=[
+        "running_header",
+        "form_title_above_clause_one",
+        "annex_with_evidence",
+        "appendix_with_site_records",
+        "contents_of_the_notice",
+        "index_linked_adjustment",
+    ],
+)
+def test_a_marker_word_alone_does_not_drop_a_page(text: str) -> None:
+    assert classify_page(PageText(page_number=11, text=text)) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Numbered rows ending in a quantity: shaped like a contents page,
+        # but the descriptions are not titles.
+        "\n".join(f"{i} Item description number {i}   {i * 3}" for i in range(1, 15)),
+        # Rows ending in a figure that name no clause at all.
+        "\n".join(f"Section {i} Completion Date   {i + 10}" for i in range(1, 10)),
+    ],
+    ids=["numbered_table_rows", "schedule_rows"],
+)
+def test_a_table_whose_rows_end_in_figures_is_not_a_contents_page(text: str) -> None:
+    assert classify_page(PageText(page_number=58, text=text)) is True
+
+
+def test_a_short_index_page_is_still_dropped() -> None:
+    """The marker's remaining job: two entries is enough under a title.
+
+    Four entries are required without one, which a four-line index never
+    reaches — and an index indexes the body rather than stating it.
+    """
+    page = PageText(
+        page_number=3,
+        text=(
+            "INDEX OF SUB-CLAUSES\n"
+            "Sub-Clause Page\n"
+            "1.1 Definitions 8\n"
+            "1.2 Interpretation 9"
+        ),
+    )
+    assert classify_page(page) is False
+
+
+def test_two_contents_lines_on_an_unmarked_body_page_are_not_enough() -> None:
+    page = PageText(
+        page_number=44,
+        text=(
+            "20.1 Claims 120\n"
+            "20.2 Notice of Claim 121\n"
+            "The claiming Party shall give a Notice to the Engineer describing "
+            "the event or circumstance giving rise to the Claim."
+        ),
+    )
+    assert classify_page(page) is True
+
+
 def test_clause_number_after_a_marginal_note_is_detected() -> None:
     """Regression: with the number inline after the marginal note, no heading
     was found and passages inherited the previous clause's number — so a
