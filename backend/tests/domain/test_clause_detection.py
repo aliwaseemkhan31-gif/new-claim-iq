@@ -521,6 +521,130 @@ def test_marginal_heading_offset_survives_crlf() -> None:
     assert text[headings[0].char_offset :].startswith("53.3 Within 28 days")
 
 
+# ---------------------------------------------------------------------------
+# Heading layouts beyond "number, space, Capitalised title"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line,number",
+    [
+        ("CLAUSE 20 CLAIMS", "20"),
+        ("CLAUSE 20: DEFINITIONS", "20"),
+        ("SUB-CLAUSE 20.1 CLAIMS", "20.1"),
+        ("ARTICLE IV PAYMENT", "4"),
+        ("A.1 General Requirements", "A.1"),
+        ("5.1 notice of claim", "5.1"),
+        ("4.1 2017 Edition Amendments", "4.1"),
+        ("20.2.1NoticeofClaim", "20.2.1"),
+        ("2O.2.1 Notice of Claim", "20.2.1"),
+        ("l4.1 Payment Terms", "14.1"),
+        ("20.2.1 Notice of Claim", "20.2.1"),
+    ],
+    ids=[
+        "caps_keyword",
+        "caps_keyword_colon",
+        "caps_sub_clause",
+        "roman_after_keyword",
+        "lettered_annex",
+        "lowercase_title",
+        "title_opening_with_a_year",
+        "ocr_dropped_the_spaces",
+        "ocr_read_o_for_zero",
+        "ocr_read_l_for_one",
+        "non_breaking_space",
+    ],
+)
+def test_a_known_printing_layout_is_detected(line: str, number: str) -> None:
+    """Each of these is how a real printing or a real scan sets a heading.
+
+    Between them they accounted for most of the clauses missing from the
+    published knowledge bases of the Silver 1999 and Red 1987 forms.
+    """
+    headings, _skipped = detect_headings([PageText(page_number=7, text=line)])
+    assert [h.number for h in headings] == [number]
+
+
+def test_a_number_alone_on_its_line_takes_the_title_beneath_it() -> None:
+    """The layout of the FIDIC 2017 forms and of Silver 1999.
+
+    147 lines of the Yellow Book and 41 of Silver are a clause number and
+    nothing else, and no line-leading pattern can see a title that is not on
+    the line.
+    """
+    page = PageText(
+        page_number=18,
+        text=(
+            "20.1\nClaims\nA Claim may arise:\n"
+            "(a) if the Employer considers that the Employer is entitled"
+        ),
+    )
+    headings, _skipped = detect_headings([page])
+    assert [(h.number, h.title) for h in headings] == [("20.1", "Claims")]
+    assert page.text[headings[0].char_offset :].startswith("20.1")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A page number at the foot of a page, with a real heading following.
+        "Earlier provision text about payments to the Contractor.\n12",
+        # An ordinary numbered list: the text beneath is a provision, not a name.
+        "1\nThe first item of the list is described here at some length.",
+        # Two numbers running together must not pair up.
+        "20.1\n20.2",
+    ],
+    ids=["page_number_at_a_page_foot", "numbered_list", "two_numbers"],
+)
+def test_a_lone_number_does_not_adopt_a_title_it_has_no_claim_to(text: str) -> None:
+    headings, _skipped = detect_headings([PageText(page_number=4, text=text)])
+    assert headings == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "1.5 million in damages was claimed by the Contractor",
+        "2.5 m of embankment was lost",
+        "28 days after the Contractor became aware of the event",
+        "3 months of delay were incurred",
+        "5 Million Rupees Only",
+    ],
+    ids=["million", "metres", "days", "months", "amount_in_words"],
+)
+def test_a_figure_followed_by_its_unit_is_not_a_clause_number(line: str) -> None:
+    """Allowing a lower-case title made every measurement on the page a heading.
+
+    The leading figure is the quantity and the word after it is the unit, which
+    is the same test the citation side has always applied.
+    """
+    headings, _skipped = detect_headings([PageText(page_number=4, text=line)])
+    assert headings == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Oil 5 Contract Supply",
+        "lo.5 something",
+        "III Payment Terms",
+        "I shall pay the sum due",
+        "Items I and II are listed below",
+        "A Claim may arise under the Contract",
+    ],
+    ids=["all_lookalikes", "word_then_figure", "bare_roman", "bare_i", "roman_in_prose", "bare_a"],
+)
+def test_letters_that_resemble_a_number_are_not_one(line: str) -> None:
+    """Repair is confined to a token that already holds a digit.
+
+    Without that, the look-alike set turns any word spelt from it into a
+    clause, and a bare Roman numeral makes one of every line opening with
+    "I", "C" or "X".
+    """
+    headings, _skipped = detect_headings([PageText(page_number=4, text=line)])
+    assert headings == []
+
+
 def test_prose_beginning_with_a_clause_reference_is_not_a_marginal_heading() -> None:
     page = PageText(
         page_number=9,

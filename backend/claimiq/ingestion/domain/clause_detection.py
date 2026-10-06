@@ -36,19 +36,79 @@ from typing import Iterable, Sequence
 #: A dotted clause number: 20, 20.2, 20.2.1, 4.12.3
 _NUMBER = r"\d{1,3}(?:\.\d{1,3}){0,4}"
 
+#: Digits, plus the letters a scanner reads them as. Confined to the number
+#: token: ``2O.2.1`` and ``l4.1`` are what OCR returned for 20.2.1 and 14.1,
+#: and under a digits-only pattern neither line held a clause number at all.
+#: :func:`_repair_ocr_digits` requires a real digit in the token, so a word
+#: made only of look-alikes ("Oil", "III") is not mistaken for one.
+_OCR_DIGIT = r"[0-9OolIi]"
+
+#: A clause number as a heading may carry it, which is looser than
+#: :data:`_NUMBER` in two further ways. A lettered first segment ("A.1
+#: General Requirements") numbers the annexes of several of these contracts;
+#: it must be followed by a numeric segment, so the "A" of "A Claim may
+#: arise" is not read as a clause. Citations keep the strict form: a
+#: cross-reference is weaker evidence to begin with and does not need the
+#: latitude.
+_HEADING_NUMBER = (
+    r"(?:[A-Za-z]\." + _OCR_DIGIT + r"{1,3}(?:\." + _OCR_DIGIT + r"{1,3}){0,3}"
+    r"|" + _OCR_DIGIT + r"{1,3}(?:\." + _OCR_DIGIT + r"{1,3}){0,4})"
+)
+
 #: Words that explicitly introduce a cross-reference.
 _REF_KEYWORD = r"(?:Sub-?Clauses?|Clauses?|Articles?|Sections?|Paragraphs?|Items?)"
 
-#: A heading: line-leading number, then a title. The title must start with a
-#: capital or a quote/paren, and the line must not read like a sentence.
+#: The same, case-insensitively, for the heading patterns only. A printing
+#: that sets its headings in capitals ("CLAUSE 20 CLAIMS", "SUB-CLAUSE 20.1")
+#: matched none of them. Scoped with ``(?i:...)`` rather than a pattern-wide
+#: flag so the title keeps its own case test.
+_REF_KEYWORD_CI = r"(?i:" + _REF_KEYWORD + r")"
+
+#: Separators between a number and its title, including the non-breaking
+#: space a PDF sets there.
+_SEP = r"[ \t –—:\-]"
+
+#: A heading: line-leading number, then a title. The title may now open with
+#: a lower-case word or a figure ("4.1 2017 Edition Amendments"); the score
+#: judges how heading-like it reads, which is a question the first character
+#: cannot answer on its own.
 _HEADING_RE = re.compile(
     r"^[ \t]*"
-    r"(?:(?P<kw>" + _REF_KEYWORD + r")[ \t]+)?"
-    r"(?P<number>" + _NUMBER + r")"
+    r"(?:(?P<kw>" + _REF_KEYWORD_CI + r")[ \t]+)?"
+    r"(?P<number>" + _HEADING_NUMBER + r")"
     r"[.\)]?"
-    r"[ \t–—:\-]+"
-    r"(?P<title>[\"'\(“]?[A-Z][^\n]{2,120}?)"
+    + _SEP + r"+"
+    r"(?P<title>[\"'\(“]?[A-Za-z0-9][^\n]{2,120}?)"
     r"[ \t]*$",
+)
+
+#: A canonical Roman numeral, accepted only after a keyword. Standing alone
+#: it would make a clause of every line opening with "I", "C" or "X".
+_ROMAN = r"(?=[IVXLCDMivxlcdm])M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})"
+
+#: "ARTICLE IV PAYMENT". The title stays case-sensitive so "Items I and II
+#: are listed" is not read as Item 1.
+_KEYWORD_ROMAN_RE = re.compile(
+    r"^[ \t]*(?P<kw>" + _REF_KEYWORD_CI + r")[ \t]+"
+    r"(?P<number>(?i:" + _ROMAN + r"))"
+    r"[.\)]?" + _SEP + r"+"
+    r"(?P<title>[A-Z][^\n]{2,120}?)[ \t]*$"
+)
+
+#: A heading whose separator OCR dropped: "20.2.1NoticeofClaim". The title
+#: must open with a capital, which is what distinguishes this from a decimal
+#: running into the word after it.
+_HEADING_NOSPACE_RE = re.compile(
+    r"^[ \t]*(?P<number>" + _HEADING_NUMBER + r")"
+    r"(?P<title>[A-Z][^\n]{2,119}?)[ \t]*$"
+)
+
+#: A number alone on its line, with the title beneath it. The layout of the
+#: FIDIC 2017 forms and of Silver 1999, and invisible to every pattern above:
+#: 147 such lines in the Yellow Book, 41 in Silver, and with them Sub-Clauses
+#: 20.1 and 20.4 among others.
+_NUMBER_ONLY_RE = re.compile(
+    r"^[ \t]*(?P<number>" + _HEADING_NUMBER + r")[.\)]?[ \t]*$"
 )
 
 #: A cross-reference introduced by a keyword: "Sub-Clause 20.2.1".
@@ -377,17 +437,7 @@ def reads_as_a_heading_title(title: str) -> bool:
     """
     if looks_like_table_row(title):
         return False
-    words = [w for w in re.split(r"[ \t]+", title.strip()) if w]
-    content = [
-        w
-        for w in words
-        if not _is_quantity_token(w)
-        and w.lower().strip(".,;:()'’") not in _TITLE_STOPWORDS
-    ]
-    if not content:
-        return False
-    capitalised = sum(1 for w in content if w[:1].isupper())
-    return capitalised / len(content) >= _CONTENTS_TITLE_CAPS_RATIO
+    return _capitalisation_ratio(title) >= _CONTENTS_TITLE_CAPS_RATIO
 
 
 def _is_quantity_token(token: str) -> bool:
@@ -518,6 +568,91 @@ def classify_page(page: PageText) -> bool:
     return toc_hits < minimum
 
 
+#: Letters a scanner returns for digits, and what they should have been.
+_OCR_DIGIT_MAP = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1", "i": "1"})
+
+#: Fixed-width spaces a PDF sets between a number and its title. Each is one
+#: character, so replacing them leaves every offset on the line unmoved.
+_UNICODE_SPACES = str.maketrans(
+    {c: " " for c in "      "}
+)
+
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+
+
+def _repair_ocr_digits(token: str) -> str | None:
+    """Repair digit look-alikes in a clause number, or None if it is not one.
+
+    Applied to the number token and nowhere else: letters elsewhere on the
+    line are words, and rewriting them would be guessing at the text rather
+    than at the numbering.
+
+    A segment is repaired only when it already holds a digit, which is what
+    separates a misread number from lettered numbering. ``2O`` is twenty
+    misread; ``A`` in ``A.1`` is the annex letter and stays as it is. A
+    letters-only segment longer than that single annex letter is a word, so
+    the whole token is refused: ``lo.5`` is "lo" followed by a figure, not
+    clause 10.5, and ``Oil`` and ``III`` are spelt entirely in look-alikes.
+
+    >>> _repair_ocr_digits("2O.2.1")
+    '20.2.1'
+    >>> _repair_ocr_digits("l4.1")
+    '14.1'
+    >>> _repair_ocr_digits("A.1")
+    'A.1'
+    >>> _repair_ocr_digits("Oil") is None
+    True
+    >>> _repair_ocr_digits("lo.5") is None
+    True
+    """
+    if not any(ch.isdigit() for ch in token):
+        return None
+    segments = []
+    for segment in token.split("."):
+        if segment.isdigit():
+            segments.append(segment)
+        elif not any(ch.isdigit() for ch in segment):
+            if len(segment) != 1:
+                return None
+            segments.append(segment)
+        else:
+            segments.append(segment.translate(_OCR_DIGIT_MAP))
+    return ".".join(segments)
+
+
+def _roman_to_arabic(token: str) -> str:
+    """``IV`` -> ``'4'``. Numbered in Romans, a clause tree still sorts."""
+    total = 0
+    highest = 0
+    for char in reversed(token.upper()):
+        value = _ROMAN_VALUES[char]
+        total = total - value if value < highest else total + value
+        highest = max(highest, value)
+    return str(total)
+
+
+def _capitalisation_ratio(title: str) -> float:
+    """Share of ``title``'s words that are capitalised, ignoring the words
+    whose case says nothing.
+
+    Quantities carry no case, and a title lower-cases its short prepositions
+    by convention. Counting either against a title read "Engineer at Liberty
+    to Object" as running prose, and rejected "Valuation of" — the marginal
+    note of a real clause — for ending in the word that introduces its own
+    continuation.
+    """
+    words = [w for w in re.split(r"[ \t]+", title.strip()) if w]
+    content = [
+        w
+        for w in words
+        if not _is_quantity_token(w)
+        and w.lower().strip(".,;:()'’") not in _TITLE_STOPWORDS
+    ]
+    if not content:
+        return 0.0
+    return sum(1 for w in content if w[:1].isupper()) / len(content)
+
+
 def _iter_lines(text: str) -> Iterable[tuple[str, str]]:
     """Yield ``(line, line_with_terminator)`` for each line of ``text``.
 
@@ -530,8 +665,15 @@ def _iter_lines(text: str) -> Iterable[tuple[str, str]]:
     splits at exactly the same places as ``splitlines()`` while keeping each
     terminator, so the real width is available without normalising the text or
     guessing which of the eight line separators Python recognises was used.
+
+    The matched line has its fixed-width spaces folded to ordinary ones. Each
+    is a single character, so this moves no offset, and without it a heading
+    set with a non-breaking space between number and title matched nothing.
     """
-    return zip(text.splitlines(), text.splitlines(keepends=True))
+    return (
+        (line.translate(_UNICODE_SPACES), raw)
+        for line, raw in zip(text.splitlines(), text.splitlines(keepends=True))
+    )
 
 
 def _score_heading(number: str, title: str, keyword: str | None, line: str) -> float:
@@ -585,6 +727,15 @@ def _score_heading(number: str, title: str, keyword: str | None, line: str) -> f
     if clause_depth(number) >= 4:
         score -= 0.10
 
+    # A quantity, not a clause number. Once the title was allowed to open in
+    # lower case, every "28 days after the Contractor became aware", "1.5
+    # million in damages" and "2.5 m of embankment" on the page became a
+    # heading — the leading figure is the measurement, and the word after it
+    # says so. The citation path has refused these from the start; the
+    # heading path had no need to until the title test was relaxed.
+    if _UNIT_SUFFIX_RE.match(title):
+        return 0.0
+
     # A contents line reaching here is disqualified outright.
     if is_contents_line(line):
         return 0.0
@@ -625,9 +776,13 @@ def _score_margin_heading(number: str, title: str, rest: str, line: str) -> floa
 
     score = 0.5
 
-    words = [w for w in re.split(r"[ \t]+", title) if w]
-    capitalised = sum(1 for w in words if w[:1].isupper())
-    if words and capitalised / len(words) >= 0.6:
+    # Stopword-aware, so a note ending in the connective that runs on into
+    # its own clause title still reads as a label. "Valuation of" and
+    # "Increase or" each scored 1 of 2 capitalised words and fell below the
+    # threshold, which lost Sub-Clauses 52.1 and 70.1 of the 1987 form
+    # entirely — the valuation of variations and the cost-fluctuation
+    # provision, both of them routinely claimed under.
+    if _capitalisation_ratio(title) >= 0.6:
         score += 0.2
     else:
         score -= 0.2
@@ -645,6 +800,102 @@ def _score_margin_heading(number: str, title: str, rest: str, line: str) -> floa
     return max(0.0, min(1.0, score))
 
 
+#: The longest a line beneath a lone clause number may be and still be that
+#: clause's title. Past this it is the opening of the provision, not its name.
+_JOINED_TITLE_MAX_CHARS = 80
+
+
+def _clean_number(raw: str) -> str:
+    """Normalise a matched number token, repairing OCR look-alikes first.
+
+    Returns an empty string when the token is not a clause number, which the
+    callers treat as no match.
+    """
+    repaired = _repair_ocr_digits(raw)
+    return normalise_clause_number(repaired) if repaired else ""
+
+
+def _heading_in_line(line: str) -> tuple[str, str, float, int] | None:
+    """The heading on ``line``, as ``(number, title, confidence, column)``.
+
+    The layouts are tried in order and the first accepted one wins, so a line
+    yields at most one heading however many patterns it could satisfy.
+    ``column`` is where the provision starts within the line, which is the
+    number rather than the line's own beginning only for a marginal note.
+    """
+    match = _HEADING_RE.match(line)
+    if match:
+        number = _clean_number(match.group("number"))
+        title = match.group("title").strip().rstrip(".;:,")
+        if number and title:
+            confidence = _score_heading(number, title, match.group("kw"), line)
+            if confidence >= HEADING_MIN_CONFIDENCE:
+                return number, title, confidence, 0
+
+    match = _KEYWORD_ROMAN_RE.match(line)
+    if match:
+        number = _roman_to_arabic(match.group("number"))
+        title = match.group("title").strip().rstrip(".;:,")
+        if title:
+            confidence = _score_heading(number, title, match.group("kw"), line)
+            if confidence >= HEADING_MIN_CONFIDENCE:
+                return number, title, confidence, 0
+
+    match = _HEADING_NOSPACE_RE.match(line)
+    if match:
+        number = _clean_number(match.group("number"))
+        title = match.group("title").strip().rstrip(".;:,")
+        if number and title:
+            confidence = _score_heading(number, title, None, line)
+            if confidence >= HEADING_MIN_CONFIDENCE:
+                return number, title, confidence, 0
+
+    match = _MARGIN_HEADING_RE.match(line)
+    if match:
+        number = _clean_number(match.group("number"))
+        title = match.group("title").strip().rstrip(".;:,")
+        if number and title:
+            confidence = _score_margin_heading(
+                number, title, match.group("rest"), line
+            )
+            if confidence >= HEADING_MIN_CONFIDENCE:
+                return number, title, confidence, match.start("number")
+
+    return None
+
+
+def _heading_across_two_lines(line: str, following: str) -> tuple[str, str, float] | None:
+    """A lone clause number joined to the title on the line beneath it.
+
+    Guarded tightly, because a page number standing alone has the same shape
+    as a clause number standing alone. The line beneath must not itself be
+    numbered, must be short enough to be a name rather than a provision, and
+    must read like a heading title; the joined pair then faces the ordinary
+    score. Without the guards a page foot reading "12" would adopt the first
+    heading of the next page as its title and invent a clause 12.
+    """
+    match = _NUMBER_ONLY_RE.match(line)
+    if not match:
+        return None
+    number = _clean_number(match.group("number"))
+    if not number:
+        return None
+
+    title = following.strip().rstrip(".;:,")
+    if not title or len(title) > _JOINED_TITLE_MAX_CHARS:
+        return None
+    if _NUMBER_ONLY_RE.match(following) or _HEADING_RE.match(following):
+        return None
+    if not reads_as_a_heading_title(title):
+        return None
+
+    joined = f"{number} {title}"
+    confidence = _score_heading(number, title, None, joined)
+    if confidence < HEADING_MIN_CONFIDENCE:
+        return None
+    return number, title, confidence
+
+
 def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], list[int]]:
     """Detect clause headings across ``pages``.
 
@@ -659,58 +910,44 @@ def detect_headings(pages: Sequence[PageText]) -> tuple[list[ClauseHeading], lis
             skipped.append(page.page_number)
             continue
 
+        lines = list(_iter_lines(page.text))
         offset = 0
-        for line_index, (line, raw_line) in enumerate(_iter_lines(page.text)):
+        consumed = -1
+        for line_index, (line, raw_line) in enumerate(lines):
             line_start = offset
-            # Advanced here, before any branch, so the `continue` below cannot
+            # Advanced here, before any branch, so a `continue` below cannot
             # skip it. ``raw_line`` carries its own terminator, so the offset
             # stays in raw-page coordinates whatever the line ending is.
             offset += len(raw_line)
 
-            match = _HEADING_RE.match(line)
-            if match:
-                number = normalise_clause_number(match.group("number"))
-                title = match.group("title").strip().rstrip(".;:,")
-                keyword = match.group("kw")
-                if number and title:
-                    confidence = _score_heading(number, title, keyword, line)
-                    if confidence >= HEADING_MIN_CONFIDENCE:
-                        headings.append(
-                            ClauseHeading(
-                                number=number,
-                                title=title,
-                                page_number=page.page_number,
-                                line_index=line_index,
-                                char_offset=line_start,
-                                confidence=round(confidence, 3),
-                                depth=clause_depth(number),
-                            )
-                        )
-                        continue
+            if line_index == consumed:
+                continue
 
-            # The number may sit inline after a marginal note instead.
-            margin = _MARGIN_HEADING_RE.match(line)
-            if margin:
-                number = normalise_clause_number(margin.group("number"))
-                title = margin.group("title").strip().rstrip(".;:,")
-                if number and title:
-                    confidence = _score_margin_heading(
-                        number, title, margin.group("rest"), line
-                    )
-                    if confidence >= HEADING_MIN_CONFIDENCE:
-                        headings.append(
-                            ClauseHeading(
-                                number=number,
-                                title=title,
-                                page_number=page.page_number,
-                                line_index=line_index,
-                                # The provision starts at its number, not at the
-                                # marginal note, so chunking splits there.
-                                char_offset=line_start + margin.start("number"),
-                                confidence=round(confidence, 3),
-                                depth=clause_depth(number),
-                            )
-                        )
+            found = _heading_in_line(line)
+            if found is not None:
+                number, title, confidence, column = found
+            else:
+                following = lines[line_index + 1][0] if line_index + 1 < len(lines) else ""
+                joined = _heading_across_two_lines(line, following)
+                if joined is None:
+                    continue
+                number, title, confidence = joined
+                column = 0
+                # The title line belongs to this heading and is not a line of
+                # its own to search again.
+                consumed = line_index + 1
+
+            headings.append(
+                ClauseHeading(
+                    number=number,
+                    title=title,
+                    page_number=page.page_number,
+                    line_index=line_index,
+                    char_offset=line_start + column,
+                    confidence=round(confidence, 3),
+                    depth=clause_depth(number),
+                )
+            )
 
     return headings, skipped
 
