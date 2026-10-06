@@ -52,6 +52,7 @@ const TABS = [
 
 const SCREENING_TONE = {
   barred: 'danger',
+  lapsed: 'danger',
   not_ready: 'warning',
   ready_with_queries: 'info',
   ready: 'success',
@@ -112,7 +113,7 @@ const error = ref(null)
  * to stop anyone with.
  */
 const defaultTab = computed(() =>
-  ['barred', 'not_ready'].includes(screening.value?.outcome) ? 'screening' : 'overview',
+  ['barred', 'lapsed', 'not_ready'].includes(screening.value?.outcome) ? 'screening' : 'overview',
 )
 const tab = computed(() =>
   TABS.some(([id]) => id === route.query.tab) ? route.query.tab : defaultTab.value,

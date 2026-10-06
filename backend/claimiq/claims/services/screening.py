@@ -266,18 +266,74 @@ def screen_many(claims: Sequence["Claim"]) -> "Dict[str, ScreeningReport]":
     return reports
 
 
+def _counts(results: Sequence) -> dict:
+    """Outstanding/blocking/barred counts over a set of results.
+
+    Shared by areas and stages so a stage's figures are the sum of what it
+    contains rather than a second, drifting calculation.
+    """
+    return {
+        "blocking_outstanding": sum(
+            1
+            for r in results
+            if r.is_outstanding and r.check.weight.value == "blocking"
+        ),
+        "outstanding": sum(1 for r in results if r.is_outstanding),
+        "barred": sum(1 for r in results if r.status.value == "barred"),
+        # Reported separately from barred: a lapse under FIDIC 2017
+        # Sub-Clause 20.2.4 is a different mechanism and a reversible one.
+        "lapsed": sum(1 for r in results if r.status.value == "lapsed"),
+    }
+
+
+def _area_payload(report: ScreeningReport, area) -> dict:
+    from claimiq.claims.domain.screening import AREA_LABELS
+
+    results = report.for_area(area)
+    return {
+        "code": area.value,
+        "label": AREA_LABELS[area],
+        # Area-level counts so the UI can show each state at a glance rather
+        # than making a reader count twenty-five rows.
+        **_counts(results),
+        "checks": [
+            {
+                "code": result.check.code,
+                "question": result.check.question,
+                "why": result.check.why,
+                "weight": result.check.weight.value,
+                "status": result.status.value,
+                "detail": result.detail,
+                "items": list(result.items),
+                "remedy": result.check.remedy,
+            }
+            for result in results
+        ],
+    }
+
+
 def payload(report: ScreeningReport) -> dict:
     """Render a report for the API.
 
     Includes every check, satisfied ones too: a reader needs to see what was
     looked at, not only what failed.
+
+    Emits the checks twice over: once nested under ``stages``, which is the
+    Event > Notice > Claim hierarchy the screen is built on, and once as a flat
+    ``areas`` list. The flat list is retained so a client mid-deploy, or the
+    register, keeps working; it is the same area dicts by identity, not a copy.
     """
     from claimiq.claims.domain.screening import (
-        AREA_LABELS,
         OUTCOME_CAVEAT,
         OUTCOME_LABELS,
+        STAGE_AREAS,
+        STAGE_DESCRIPTIONS,
+        STAGE_LABELS,
         Area,
+        Stage,
     )
+
+    areas = {area: _area_payload(report, area) for area in Area}
 
     return {
         "claim_type": report.claim_type,
@@ -287,39 +343,17 @@ def payload(report: ScreeningReport) -> dict:
         "caveat": OUTCOME_CAVEAT,
         "blocking_outstanding": len(report.blocking_outstanding),
         "advisory_outstanding": len(report.advisory_outstanding),
-        "areas": [
+        "stages": [
             {
-                "code": area.value,
-                "label": AREA_LABELS[area],
-                # Area-level counts so the UI can show five states at a glance
-                # rather than making a reader count twenty-five rows.
-                "blocking_outstanding": sum(
-                    1
-                    for r in report.for_area(area)
-                    if r.is_outstanding and r.check.weight.value == "blocking"
-                ),
-                "outstanding": sum(
-                    1 for r in report.for_area(area) if r.is_outstanding
-                ),
-                "barred": sum(
-                    1 for r in report.for_area(area) if r.status.value == "barred"
-                ),
-                "checks": [
-                    {
-                        "code": result.check.code,
-                        "question": result.check.question,
-                        "why": result.check.why,
-                        "weight": result.check.weight.value,
-                        "status": result.status.value,
-                        "detail": result.detail,
-                        "items": list(result.items),
-                        "remedy": result.check.remedy,
-                    }
-                    for result in report.for_area(area)
-                ],
+                "code": stage.value,
+                "label": STAGE_LABELS[stage],
+                "description": STAGE_DESCRIPTIONS[stage],
+                **_counts(report.for_stage(stage)),
+                "areas": [areas[area] for area in STAGE_AREAS[stage]],
             }
-            for area in Area
+            for stage in Stage
         ],
+        "areas": list(areas.values()),
     }
 
 

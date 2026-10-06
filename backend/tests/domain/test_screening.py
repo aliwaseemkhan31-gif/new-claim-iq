@@ -22,14 +22,20 @@ from claimiq.claims.domain.notice_compliance import (
     NoticeRequirement,
 )
 from claimiq.claims.domain.screening import (
+    AREA_LABELS,
     CHECKS,
     CHECKS_BY_AREA,
+    STAGE_AREAS,
+    STAGE_DESCRIPTIONS,
+    STAGE_LABELS,
     Area,
     CheckStatus,
     Outcome,
     ScreeningInput,
+    Stage,
     Weight,
     screen_claim,
+    stage_of,
 )
 
 TODAY = date(2026, 9, 27)
@@ -118,12 +124,94 @@ def test_every_check_is_reachable_and_uniquely_coded() -> None:
 
 
 def test_every_declared_dependency_exists_and_precedes_its_dependant() -> None:
-    """A dependency declared after its dependant would silently never apply."""
+    """A dependency declared after its dependant would silently never apply.
+
+    This is about ``CHECKS`` evaluation order, which is deliberately not the
+    order the stages are shown in. See the note on ``CHECKS``.
+    """
     seen: set = set()
     for check in CHECKS:
         for code in check.depends_on:
             assert code in seen, f"{check.code} depends on {code}, which runs later"
         seen.add(check.code)
+
+
+# ---------------------------------------------------------------------------
+# The Event > Notice > Claim hierarchy
+#
+# The stages are the chain a claims person reads a claim along, and the client
+# requirement that introduced them. FIDIC 2017 Sub-Clause 20.2.4 defines the
+# fully detailed Claim as a submission including (b) the contractual basis,
+# (c) the contemporary records and (d) the particulars of the amount and/or
+# EOT claimed — so those three areas sit inside the Claim stage rather than
+# beside it.
+# ---------------------------------------------------------------------------
+
+
+def test_every_area_belongs_to_exactly_one_stage() -> None:
+    """An area in two stages would be counted twice; one in none would vanish."""
+    placed = [area for areas in STAGE_AREAS.values() for area in areas]
+    assert sorted(placed, key=lambda a: a.value) == sorted(Area, key=lambda a: a.value)
+    assert len(placed) == len(set(placed))
+
+
+def test_every_stage_is_populated_and_labelled() -> None:
+    for stage in Stage:
+        assert STAGE_AREAS[stage], stage
+        assert STAGE_LABELS[stage].strip(), stage
+        assert STAGE_DESCRIPTIONS[stage].strip(), stage
+
+
+def test_the_hierarchy_runs_event_then_notice_then_claim() -> None:
+    """The client requirement, asserted literally."""
+    assert list(Stage) == [Stage.EVENT, Stage.NOTICE, Stage.CLAIM]
+    assert [STAGE_LABELS[s] for s in Stage] == ["Event", "Notice", "Claim"]
+
+
+def test_the_claim_stage_holds_the_parts_of_a_detailed_claim() -> None:
+    """"Claim (includes entitlement)" — Sub-Clause 20.2.4: the submission
+    itself, then (b) the basis, (c) the records and (d) the particulars."""
+    assert STAGE_AREAS[Stage.CLAIM] == (
+        Area.SUBMISSION,
+        Area.ENTITLEMENT,
+        Area.RECORDS,
+        Area.RELIEF,
+    )
+    assert stage_of(Area.ENTITLEMENT) is Stage.CLAIM
+    assert stage_of(Area.SUBMISSION) is Stage.CLAIM
+
+
+def test_entitlement_is_labelled_as_part_of_the_claim_not_a_peer() -> None:
+    """It is no longer a top-level step, and the label should not imply it is."""
+    assert "Claim" in AREA_LABELS[Area.ENTITLEMENT]
+
+
+def test_areas_are_declared_in_hierarchy_order() -> None:
+    """``payload`` iterates ``Area``, so the enum carries presentation order."""
+    assert list(Area) == [
+        Area.EVENT,
+        Area.NOTICE,
+        Area.SUBMISSION,
+        Area.ENTITLEMENT,
+        Area.RECORDS,
+        Area.RELIEF,
+    ]
+
+
+def test_for_stage_returns_every_result_in_the_stage() -> None:
+    report = screen_claim(complete_input())
+    for stage in Stage:
+        expected = {r.check.code for r in report.results if stage_of(r.check.area) is stage}
+        assert {r.check.code for r in report.for_stage(stage)} == expected
+    total = sum(len(report.for_stage(s)) for s in Stage)
+    assert total == len(report.results)
+
+
+def test_for_stage_orders_results_by_area() -> None:
+    """Within the Claim stage: basis, then records, then relief."""
+    report = screen_claim(complete_input())
+    areas = [r.check.area for r in report.for_stage(Stage.CLAIM)]
+    assert areas == sorted(areas, key=lambda a: STAGE_AREAS[Stage.CLAIM].index(a))
 
 
 def test_every_check_states_a_condition_and_a_reason() -> None:

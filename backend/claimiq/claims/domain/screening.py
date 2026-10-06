@@ -52,7 +52,11 @@ from decimal import Decimal
 from enum import Enum
 from typing import List, Mapping, Optional, Tuple
 
-from claimiq.claims.domain.notice_compliance import ComplianceFinding, ComplianceStatus
+from claimiq.claims.domain.notice_compliance import (
+    ComplianceFinding,
+    ComplianceStatus,
+    Obligation,
+)
 
 
 class CheckStatus(str, Enum):
@@ -75,26 +79,111 @@ class CheckStatus(str, Enum):
     single case the system can actually compute: notice late under a provision
     expressed as a condition precedent. No other check may return this."""
 
+    LAPSED = "lapsed"
+    """The contract, on the recorded facts, makes the Notice of Claim lapse.
+
+    Deliberately not BARRED. FIDIC 2017 Sub-Clause 20.2.4 provides that where
+    the statement of the contractual and/or other legal basis is not submitted
+    within the period, "the Notice of Claim shall be deemed to have lapsed, it
+    shall no longer be considered as a valid Notice". That is a different
+    mechanism from a condition precedent, and a reversible one: the Engineer
+    must give Notice of it within 14 days, and if no such Notice is given the
+    Notice of Claim is deemed valid after all.
+
+    Reporting it as a time bar would overstate it; reporting it as an ordinary
+    outstanding item would understate it. Like BARRED, only the check that
+    computes it may return it."""
+
     NOT_APPLICABLE = "not_applicable"
     """Does not apply to this claim type. Distinct from SATISFIED — a quantum
     check skipped on a pure extension-of-time claim has not passed."""
 
 
 class Area(str, Enum):
-    ENTITLEMENT = "entitlement"
-    NOTICE = "notice"
+    """A group of checks that ask about the same thing.
+
+    Declaration order is presentation order: :func:`services.screening.payload`
+    iterates this enum. It follows the chain in :class:`Stage` — event first,
+    then notice, then the three parts of the Claim itself.
+    """
+
     EVENT = "event"
+    NOTICE = "notice"
+    SUBMISSION = "submission"
+    ENTITLEMENT = "entitlement"
     RECORDS = "records"
     RELIEF = "relief"
 
 
 AREA_LABELS: Mapping[Area, str] = {
-    Area.ENTITLEMENT: "Contractual entitlement",
-    Area.NOTICE: "Notice and procedural compliance",
     Area.EVENT: "Event occurrence and causation",
+    Area.NOTICE: "Notice and procedural compliance",
+    # The four areas below map onto FIDIC 2017 Sub-Clause 20.2.4: the
+    # submission itself, then (b) the contractual basis, (c) the contemporary
+    # records and (d) the particulars of the amount and/or EOT claimed. They
+    # are named as parts of the Claim rather than peers of it.
+    Area.SUBMISSION: "The Claim as submitted",
+    Area.ENTITLEMENT: "Contractual basis of the Claim",
     Area.RECORDS: "Supporting evidence and contemporary records",
     Area.RELIEF: "Quantum and relief claimed",
 }
+
+
+class Stage(str, Enum):
+    """The three stages a claim passes through, in order.
+
+    The areas above are the working groups; these are the chain a claims person
+    reads them along. Event, then Notice, then Claim — and the Claim contains
+    the basis, the records and the relief rather than sitting beside them.
+
+    This is the contract's own structure, not a presentation choice. FIDIC 2017
+    Sub-Clause 20.2.4 defines the "fully detailed Claim" as a submission which
+    includes (a) a detailed description of the event, (b) a statement of the
+    contractual and/or other legal basis, (c) all contemporary records relied
+    on, and (d) detailed supporting particulars of the amount and/or EOT
+    claimed. The 1999 forms have the same shape at Sub-Clause 20.1: notice
+    first, fully detailed claim after.
+    """
+
+    EVENT = "event"
+    NOTICE = "notice"
+    CLAIM = "claim"
+
+
+STAGE_LABELS: Mapping[Stage, str] = {
+    Stage.EVENT: "Event",
+    Stage.NOTICE: "Notice",
+    Stage.CLAIM: "Claim",
+}
+
+#: What each stage asks, in one line. Shown under the stage name, because
+#: "Event" and "Notice" on their own do not say what is being looked at.
+STAGE_DESCRIPTIONS: Mapping[Stage, str] = {
+    Stage.EVENT: "What happened, and when.",
+    Stage.NOTICE: "Whether the event was notified, in time and to the right party.",
+    Stage.CLAIM: "What is being asked for, on what basis, and on what evidence.",
+}
+
+#: Areas belonging to each stage, in reading order. Every area appears exactly
+#: once; :data:`STAGE_AREAS` and :class:`Area` are kept consistent by a test.
+STAGE_AREAS: Mapping[Stage, Tuple[Area, ...]] = {
+    Stage.EVENT: (Area.EVENT,),
+    Stage.NOTICE: (Area.NOTICE,),
+    Stage.CLAIM: (
+        Area.SUBMISSION,
+        Area.ENTITLEMENT,
+        Area.RECORDS,
+        Area.RELIEF,
+    ),
+}
+
+
+def stage_of(area: Area) -> Stage:
+    """The stage ``area`` belongs to."""
+    for stage, areas in STAGE_AREAS.items():
+        if area in areas:
+            return stage
+    raise KeyError(area)
 
 
 class Weight(str, Enum):
@@ -119,7 +208,8 @@ class ScreeningCheck:
     Attributes:
         code: Stable identifier. Referenced by tests and by any stored result,
             so it must not change once used.
-        area: Which of the five areas it belongs to.
+        area: Which of the five areas it belongs to. The area in turn belongs
+            to one of the three stages — see :class:`Stage`.
         question: The question, in the words a claims person would use.
         why: What turns on it. Shown when someone asks why they are being
             asked; a check nobody understands gets ignored or gamed.
@@ -160,7 +250,11 @@ _INSTRUCTED_TYPES = ("variation", "acceleration")
 
 
 # ---------------------------------------------------------------------------
-# Area 1 — Contractual entitlement
+# Claim stage — Contractual basis of the Claim
+#
+# Part of the Claim, not a stage of its own: FIDIC 2017 Sub-Clause 20.2.4(b)
+# makes the statement of the contractual and/or other legal basis a
+# constituent of the fully detailed Claim.
 #
 # Screening cannot decide whether a clause confers entitlement; that is the
 # entitlement strand, and it needs the contract text. What it can decide is
@@ -244,11 +338,18 @@ ENTITLEMENT_CHECKS: Tuple[ScreeningCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Area 2 — Notice and procedural compliance
+# Notice stage — Notice and procedural compliance
 #
-# The only area where screening can reach a conclusion adverse to the claim,
-# because it is the only one that is arithmetic over recorded dates. Every
-# check delegates to notice_compliance; none re-implements it.
+# Scoped to the Notice of Claim — the first, short-period communication
+# ("this happened, and I may have a claim"). The fully detailed Claim that
+# follows it is a different obligation with a different period and a different
+# consequence, and it is checked in the Claim stage under Area.SUBMISSION.
+# Running these checks over both, as they used to, reported a missing detailed
+# Claim as a notice failure and sent the reader to the wrong part of the file.
+#
+# The only area where screening can reach a conclusion adverse to the claim on
+# the contract, because it is the only one that is arithmetic over recorded
+# dates. Every check delegates to notice_compliance; none re-implements it.
 # ---------------------------------------------------------------------------
 
 NOTICE_CHECKS: Tuple[ScreeningCheck, ...] = (
@@ -399,7 +500,7 @@ NOTICE_CHECKS: Tuple[ScreeningCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Area 3 — Event occurrence and causation
+# Event stage — Event occurrence and causation
 #
 # A boundary worth being explicit about: occurrence can be screened, causation
 # cannot. Whether an event caused the effect claimed is a question about
@@ -497,7 +598,10 @@ EVENT_CHECKS: Tuple[ScreeningCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Area 4 — Supporting evidence and contemporary records
+# Claim stage — Supporting evidence and contemporary records
+#
+# Sub-Clause 20.2.4(c): the contemporary records relied on are submitted with
+# the Claim.
 #
 # At screening time there is usually no evidence linked, and that is expected
 # rather than a failure: gathering it is the work that screening precedes. So
@@ -568,7 +672,10 @@ RECORDS_CHECKS: Tuple[ScreeningCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Area 5 — Quantum and relief claimed
+# Claim stage — Quantum and relief claimed
+#
+# Sub-Clause 20.2.4(d): the supporting particulars of the amount and/or EOT
+# claimed are submitted with the Claim.
 #
 # Screening checks that relief is stated and internally coherent. It never
 # checks whether the amount is right: that needs the measurement, the rates and
@@ -669,19 +776,139 @@ RELIEF_CHECKS: Tuple[ScreeningCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Claim stage — The Claim as submitted
+#
+# The second of the two obligations the standard forms impose. FIDIC 2017
+# Sub-Clause 20.2.4 requires a fully detailed Claim within 84 days of
+# awareness; the 1999 forms require one within 42 at Sub-Clause 20.1. It is not
+# a notice and must not be checked as one — hence Area.SUBMISSION rather than
+# Area.NOTICE.
+#
+# Two things make this area different from the notice checks it was split out
+# of. The first is that a detailed Claim is routinely not yet due when a claim
+# is screened, so "not on record" has to be told apart from "late"; the period
+# is read from the requirement and compared against today rather than assumed
+# to have run. The second is the consequence. Under 2017 the period is not a
+# condition precedent, but failing to submit the sub-paragraph (b) statement of
+# contractual basis within it makes the Notice of Claim lapse — a different
+# mechanism, reported as LAPSED rather than BARRED, and a reversible one.
+# ---------------------------------------------------------------------------
+
+SUBMISSION_CHECKS: Tuple[ScreeningCheck, ...] = (
+    ScreeningCheck(
+        code="DC1",
+        area=Area.SUBMISSION,
+        question="Is a fully detailed Claim on record?",
+        why=(
+            "The Notice of Claim opens the claim; the fully detailed Claim is "
+            "what the other party actually answers. A file holding only the "
+            "notice is a claim that has been started and not made."
+        ),
+        condition=(
+            "Over findings whose requirement obligation is DETAILED_CLAIM. "
+            "NOT_APPLICABLE where none is registered for the edition. "
+            "SATISFIED where none is NOT_GIVEN. INCOMPLETE otherwise, naming "
+            "the clause and saying whether the period has expired — a Claim "
+            "not yet due is outstanding work, not a failure."
+        ),
+        weight=Weight.ADVISORY,
+        depends_on=("NC1", "NC2"),
+        remedy=(
+            "Record the detailed submission as correspondence, then assert it "
+            "under the clause it was given under."
+        ),
+    ),
+    ScreeningCheck(
+        code="DC2",
+        area=Area.SUBMISSION,
+        question="Was the fully detailed Claim submitted within its period?",
+        why=(
+            "Late submission is not a time bar under these provisions, but it "
+            "is the point at which the 2017 forms make the Notice of Claim "
+            "lapse, and under any form it invites an argument about prejudice."
+        ),
+        condition=(
+            "SATISFIED where no DETAILED_CLAIM finding is LATE. INCOMPLETE "
+            "otherwise, naming the clause and the days late. Never BARRED: "
+            "these provisions are not conditions precedent, and DC3 reports "
+            "the lapse consequence where the contract provides one."
+        ),
+        weight=Weight.ADVISORY,
+        depends_on=("NC1", "DC1"),
+        remedy=(
+            "Check for an agreed extension of the period before relying on the "
+            "default: the forms allow another period where one is proposed and "
+            "agreed."
+        ),
+    ),
+    ScreeningCheck(
+        code="DC3",
+        area=Area.SUBMISSION,
+        question="Has the period for stating the contractual basis expired?",
+        why=(
+            "FIDIC 2017 Sub-Clause 20.2.4 provides that if the statement of "
+            "the contractual and/or other legal basis is not submitted within "
+            "the period, the Notice of Claim is deemed to have lapsed and is "
+            "no longer a valid Notice. It is the one consequence in this area "
+            "that is adverse on the contract rather than on the state of the "
+            "file, and it is worth finding before the evidence is assembled."
+        ),
+        condition=(
+            "NOT_APPLICABLE where no DETAILED_CLAIM requirement carries a "
+            "lapse_consequence — the 1999 and 1987 forms do not. SATISFIED "
+            "where the period has not expired, naming the date, or where a "
+            "detailed Claim is on record and a contractual basis is recorded. "
+            "INCOMPLETE where a Claim is on record but no basis is recorded, "
+            "because whether the submission contained the sub-paragraph (b) "
+            "statement cannot be read from the record. LAPSED only where the "
+            "period has expired and no detailed Claim is on record. The "
+            "wording must state that the Engineer must give Notice of the "
+            "lapse within 14 days and that absent such a Notice the Notice of "
+            "Claim is deemed valid."
+        ),
+        weight=Weight.BLOCKING,
+        depends_on=("NC1", "NC2"),
+        remedy=(
+            "Read Sub-Clause 20.2.4 and check whether the Engineer gave Notice "
+            "of the lapse within 14 days. A computed lapse is a reason to take "
+            "advice, not a determination."
+        ),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # The checklist
 # ---------------------------------------------------------------------------
 
-#: Every check, in the order a person would work through them. Order matters
-#: for presentation only; dependencies are declared, not implied by position.
+#: Every check, in **evaluation** order — not the order they are shown in.
+#:
+#: ``screen_claim`` gates a check on results already computed, and skips a
+#: dependency it has not reached yet (``by_code.get`` returns None). So a check
+#: must run after everything in its ``depends_on``, and this tuple is ordered
+#: to guarantee that. A test enforces it.
+#:
+#: Presentation order is a separate matter and is taken from the :class:`Area`
+#: enum and :data:`STAGE_AREAS`, which follow the Event > Notice > Claim chain.
+#: The two differ: EV3 compares the event date against the awareness date and
+#: so depends on NC1, which means the Event stage is shown first but evaluated
+#: after part of Notice. Reordering this tuple to match the screen would break
+#: that gate silently.
 CHECKS: Tuple[ScreeningCheck, ...] = (
-    ENTITLEMENT_CHECKS + NOTICE_CHECKS + EVENT_CHECKS + RECORDS_CHECKS + RELIEF_CHECKS
+    ENTITLEMENT_CHECKS
+    + NOTICE_CHECKS
+    + EVENT_CHECKS
+    + RECORDS_CHECKS
+    + RELIEF_CHECKS
+    # Last: the submission checks gate on NC1, NC2 and each other.
+    + SUBMISSION_CHECKS
 )
 
 CHECKS_BY_AREA: Mapping[Area, Tuple[ScreeningCheck, ...]] = {
-    Area.ENTITLEMENT: ENTITLEMENT_CHECKS,
-    Area.NOTICE: NOTICE_CHECKS,
     Area.EVENT: EVENT_CHECKS,
+    Area.NOTICE: NOTICE_CHECKS,
+    Area.SUBMISSION: SUBMISSION_CHECKS,
+    Area.ENTITLEMENT: ENTITLEMENT_CHECKS,
     Area.RECORDS: RECORDS_CHECKS,
     Area.RELIEF: RELIEF_CHECKS,
 }
@@ -695,9 +922,17 @@ class Outcome(str, Enum):
     """
 
     BARRED = "barred"
-    """A notice was late under a condition precedent. The only outcome that is
-    adverse on the contract rather than on the state of the file, and the only
-    one a person needs to act on immediately."""
+    """A notice was late under a condition precedent. Adverse on the contract
+    rather than on the state of the file, and one a person needs to act on
+    immediately."""
+
+    LAPSED = "lapsed"
+    """The period for the statement of contractual basis expired with no
+    detailed Claim on record, so the Notice of Claim may have lapsed under
+    FIDIC 2017 Sub-Clause 20.2.4. Also adverse on the contract, and ranked
+    below BARRED only because it is the reversible one: the Engineer must give
+    Notice of the lapse within 14 days, and absent that the Notice of Claim is
+    deemed valid."""
 
     NOT_READY = "not_ready"
     """At least one blocking check is INCOMPLETE or INDETERMINATE. The claim
@@ -716,6 +951,7 @@ class Outcome(str, Enum):
 #: changes what someone should do today.
 OUTCOME_PRECEDENCE: Tuple[Outcome, ...] = (
     Outcome.BARRED,
+    Outcome.LAPSED,
     Outcome.NOT_READY,
     Outcome.READY_WITH_QUERIES,
     Outcome.READY,
@@ -723,6 +959,7 @@ OUTCOME_PRECEDENCE: Tuple[Outcome, ...] = (
 
 OUTCOME_LABELS: Mapping[Outcome, str] = {
     Outcome.BARRED: "Possible time bar — read the provision",
+    Outcome.LAPSED: "Notice of Claim may have lapsed — read the provision",
     Outcome.NOT_READY: "Not yet assessable",
     Outcome.READY_WITH_QUERIES: "Assessable, with queries",
     Outcome.READY: "Assessable",
@@ -820,6 +1057,31 @@ class ScreeningInput:
     currency: str = ""
     time_claimed_days: Optional[int] = None
 
+    # -- The two obligations, kept apart ----------------------------------
+    #
+    # The standard forms impose two submissions in sequence and they fail
+    # differently: a missing Notice of Claim is a notice failure, a missing
+    # fully detailed Claim is a failure of the Claim itself. Screening used to
+    # run every check over both, which reported the second as the first.
+
+    @property
+    def notice_of_claim_findings(self) -> Tuple[ComplianceFinding, ...]:
+        """Findings for the first, short-period communication only."""
+        return tuple(
+            f
+            for f in self.notice_findings
+            if f.requirement.obligation is Obligation.NOTICE_OF_CLAIM
+        )
+
+    @property
+    def detailed_claim_findings(self) -> Tuple[ComplianceFinding, ...]:
+        """Findings for the fully detailed Claim that follows it."""
+        return tuple(
+            f
+            for f in self.notice_findings
+            if f.requirement.obligation is Obligation.DETAILED_CLAIM
+        )
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -856,9 +1118,24 @@ class ScreeningReport:
     def for_area(self, area: Area) -> Tuple[CheckResult, ...]:
         return tuple(r for r in self.results if r.check.area is area)
 
+    def for_stage(self, stage: Stage) -> Tuple[CheckResult, ...]:
+        """Every result in the stage, in area order."""
+        areas = STAGE_AREAS[stage]
+        return tuple(r for area in areas for r in self.for_area(area))
+
     @property
     def barred(self) -> Tuple[CheckResult, ...]:
         return tuple(r for r in self.results if r.status is CheckStatus.BARRED)
+
+    @property
+    def lapsed(self) -> Tuple[CheckResult, ...]:
+        return tuple(r for r in self.results if r.status is CheckStatus.LAPSED)
+
+    @property
+    def adverse(self) -> Tuple[CheckResult, ...]:
+        """Everything adverse on the contract rather than on the state of the
+        file. Both are lifted out of their stage on the screen."""
+        return self.barred + self.lapsed
 
     @property
     def blocking_outstanding(self) -> Tuple[CheckResult, ...]:
@@ -880,6 +1157,8 @@ class ScreeningReport:
     def outcome(self) -> Outcome:
         if self.barred:
             return Outcome.BARRED
+        if self.lapsed:
+            return Outcome.LAPSED
         if self.blocking_outstanding:
             return Outcome.NOT_READY
         if self.advisory_outstanding:
@@ -890,15 +1169,20 @@ class ScreeningReport:
         """One line. Counts what is outstanding; never scores the claim."""
         blocking = len(self.blocking_outstanding)
         advisory = len(self.advisory_outstanding)
+        counts = "{} blocking and {} advisory item(s) outstanding.".format(
+            blocking, advisory
+        )
         if self.barred:
-            clauses = ", ".join(
-                sorted({i for r in self.barred for i in r.items})
+            clauses = ", ".join(sorted({i for r in self.barred for i in r.items}))
+            return "Possible time bar under {}. {}".format(
+                clauses or "a notice provision", counts
             )
-            return (
-                "Possible time bar under {}. {} blocking and {} advisory "
-                "item(s) outstanding.".format(clauses or "a notice provision", blocking, advisory)
+        if self.lapsed:
+            clauses = ", ".join(sorted({i for r in self.lapsed for i in r.items}))
+            return "Notice of Claim may have lapsed under {}. {}".format(
+                clauses or "the detailed claim provision", counts
             )
-        return "{} blocking and {} advisory item(s) outstanding.".format(blocking, advisory)
+        return counts
 
 
 # ---------------------------------------------------------------------------
@@ -1024,7 +1308,7 @@ def _nc2(data: ScreeningInput) -> _Evaluation:
 def _nc3(data: ScreeningInput) -> _Evaluation:
     not_given = tuple(
         f.requirement.clause_number
-        for f in data.notice_findings
+        for f in data.notice_of_claim_findings
         if f.status is ComplianceStatus.NOT_GIVEN
     )
     if not not_given:
@@ -1041,7 +1325,7 @@ def _nc3(data: ScreeningInput) -> _Evaluation:
 
 def _nc4(data: ScreeningInput) -> _Evaluation:
     barred = tuple(
-        f.requirement.clause_number for f in data.notice_findings if f.is_time_barred
+        f.requirement.clause_number for f in data.notice_of_claim_findings if f.is_time_barred
     )
     if not barred:
         return _SATISFIED, "No notice is late under a condition precedent.", ()
@@ -1059,7 +1343,7 @@ def _nc4(data: ScreeningInput) -> _Evaluation:
 def _nc5(data: ScreeningInput) -> _Evaluation:
     late = tuple(
         "Clause {} — {} day(s) late".format(f.requirement.clause_number, f.days_late)
-        for f in data.notice_findings
+        for f in data.notice_of_claim_findings
         if f.status is ComplianceStatus.LATE and not f.is_time_barred
     )
     if not late:
@@ -1075,7 +1359,7 @@ def _nc5(data: ScreeningInput) -> _Evaluation:
 
 def _nc6(data: ScreeningInput) -> _Evaluation:
     mismatched = []
-    for finding in data.notice_findings:
+    for finding in data.notice_of_claim_findings:
         notice = finding.notice
         required = finding.requirement.recipient
         if notice is None or not required or not notice.recipient:
@@ -1100,7 +1384,7 @@ def _nc7(data: ScreeningInput) -> _Evaluation:
         "Clause {} — {}".format(
             f.requirement.clause_number, f.notice.document_title or "notice"
         )
-        for f in data.notice_findings
+        for f in data.notice_of_claim_findings
         if f.notice is not None and f.notice.received_date is None
     )
     if not missing:
@@ -1118,7 +1402,7 @@ def _nc8(data: ScreeningInput) -> _Evaluation:
         "Clause {} — {}".format(
             f.requirement.clause_number, f.notice.document_title or "notice"
         )
-        for f in data.notice_findings
+        for f in data.notice_of_claim_findings
         if f.notice is not None and not f.notice.is_confirmed_notice
     )
     if not unconfirmed:
@@ -1322,6 +1606,147 @@ def _qr5(data: ScreeningInput) -> _Evaluation:
     )
 
 
+def _clauses(findings: Tuple[ComplianceFinding, ...]) -> str:
+    """"Clause 20.2.4", or a list of them."""
+    return ", ".join(
+        "Clause " + c
+        for c in sorted({f.requirement.clause_number for f in findings})
+    )
+
+
+def _dc1(data: ScreeningInput) -> _Evaluation:
+    findings = data.detailed_claim_findings
+    if not findings:
+        return (
+            _NOT_APPLICABLE,
+            "No fully detailed Claim requirement is registered for {}.".format(
+                data.edition_label or data.edition_code or "this edition"
+            ),
+            (),
+        )
+
+    missing = tuple(f for f in findings if f.status is ComplianceStatus.NOT_GIVEN)
+    if not missing:
+        return _SATISFIED, "A fully detailed Claim is on record under {}.".format(
+            _clauses(findings)
+        ), ()
+
+    # Not yet due is not the same as late, and saying so is the difference
+    # between a deadline a person can work to and a failure they cannot undo.
+    items = []
+    overdue = False
+    for finding in missing:
+        clause = "Clause " + finding.requirement.clause_number
+        if finding.deadline is None:
+            items.append("{} — period not computed".format(clause))
+        elif finding.deadline < data.today:
+            overdue = True
+            items.append(
+                "{} — was due {}".format(clause, finding.deadline.isoformat())
+            )
+        else:
+            items.append("{} — due {}".format(clause, finding.deadline.isoformat()))
+
+    return (
+        _INCOMPLETE,
+        (
+            "No fully detailed Claim is on record and the period has expired. "
+            "Absence from the record is not proof that none was submitted."
+            if overdue
+            else "No fully detailed Claim is on record yet. The period has not "
+            "expired, so this is work outstanding rather than a failure."
+        ),
+        tuple(items),
+    )
+
+
+def _dc2(data: ScreeningInput) -> _Evaluation:
+    findings = data.detailed_claim_findings
+    if not findings:
+        return (
+            _NOT_APPLICABLE,
+            "No fully detailed Claim requirement is registered for {}.".format(
+                data.edition_label or data.edition_code or "this edition"
+            ),
+            (),
+        )
+
+    late = tuple(
+        "Clause {} — {} day(s) late".format(f.requirement.clause_number, f.days_late)
+        for f in findings
+        if f.status is ComplianceStatus.LATE
+    )
+    if not late:
+        return _SATISFIED, "The fully detailed Claim was submitted in time.", ()
+    return (
+        _INCOMPLETE,
+        "The fully detailed Claim was submitted outside its period. These "
+        "provisions are not conditions precedent, so this does not bar the "
+        "claim, but check whether a longer period was proposed and agreed.",
+        late,
+    )
+
+
+def _dc3(data: ScreeningInput) -> _Evaluation:
+    # Only where the contract states a lapse consequence. The 1999 and 1987
+    # forms do not, and inventing one for them would be the kind of
+    # cross-edition substitution ADR 0004 exists to prevent.
+    findings = tuple(
+        f for f in data.detailed_claim_findings if f.requirement.lapse_consequence
+    )
+    if not findings:
+        return (
+            _NOT_APPLICABLE,
+            "{} states no lapse consequence for a late statement of "
+            "contractual basis.".format(
+                data.edition_label or data.edition_code or "This edition"
+            ),
+            (),
+        )
+
+    expired = tuple(
+        f for f in findings if f.deadline is not None and f.deadline < data.today
+    )
+    if not expired:
+        due = sorted(f.deadline for f in findings if f.deadline is not None)
+        return _SATISFIED, (
+            "The period for the statement of contractual basis has not expired{}.".format(
+                " — it runs to " + due[0].isoformat() if due else ""
+            )
+        ), ()
+
+    on_record = tuple(
+        f for f in expired if f.status is not ComplianceStatus.NOT_GIVEN
+    )
+    if on_record:
+        if data.contractual_basis:
+            return _SATISFIED, (
+                "A fully detailed Claim is on record and a contractual basis is "
+                "recorded against the claim."
+            ), ()
+        return (
+            _INCOMPLETE,
+            "A fully detailed Claim is on record but no contractual basis is "
+            "recorded against the claim. Whether the submission contained the "
+            "statement required by sub-paragraph (b) cannot be read from the "
+            "record, and it is that statement the lapse provision turns on.",
+            tuple(_clauses(on_record).split(", ")),
+        )
+
+    return (
+        CheckStatus.LAPSED,
+        "The period under {} expired on {} with no fully detailed Claim on "
+        "record. On these facts the Notice of Claim is deemed to have lapsed "
+        "and is no longer a valid Notice. The Engineer must give Notice of "
+        "that within 14 days; if none was given, the Notice of Claim is deemed "
+        "valid after all. This is not a determination.".format(
+            _clauses(expired),
+            min(f.deadline for f in expired if f.deadline is not None).isoformat(),
+        ),
+        tuple(f.requirement.clause_number for f in expired),
+    )
+
+
 _EVALUATORS = {
     "CB1": _cb1, "CB2": _cb2, "CB3": _cb3, "CB4": _cb4,
     "NC1": _nc1, "NC2": _nc2, "NC3": _nc3, "NC4": _nc4,
@@ -1329,6 +1754,7 @@ _EVALUATORS = {
     "EV1": _ev1, "EV2": _ev2, "EV3": _ev3, "EV4": _ev4, "EV5": _ev5,
     "RC1": _rc1, "RC2": _rc2, "RC3": _rc3,
     "QR1": _qr1, "QR2": _qr2, "QR3": _qr3, "QR4": _qr4, "QR5": _qr5,
+    "DC1": _dc1, "DC2": _dc2, "DC3": _dc3,
 }
 
 

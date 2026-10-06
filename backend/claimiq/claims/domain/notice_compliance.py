@@ -53,6 +53,33 @@ class ComplianceStatus(str, Enum):
     NOT_REQUIRED = "not_required"
 
 
+class Obligation(str, Enum):
+    """Which of the two submissions a requirement is about.
+
+    The standard forms impose two in sequence, and they are different things.
+    FIDIC 2017 Sub-Clause 20.2.1 requires a Notice of Claim within 28 days of
+    awareness; Sub-Clause 20.2.4 requires a fully detailed Claim within 84. The
+    1999 forms have the same shape at Sub-Clause 20.1 with 28 and 42 days.
+
+    Keeping them apart matters because they fail differently and belong to
+    different stages of the file. A missing Notice of Claim is a notice
+    failure; a missing fully detailed Claim is a failure of the Claim itself,
+    and reporting the second as the first tells a user to go and look in the
+    wrong place.
+    """
+
+    NOTICE_OF_CLAIM = "notice_of_claim"
+    """The first, short-period communication: "this happened, and I may have a
+    claim"."""
+
+    DETAILED_CLAIM = "detailed_claim"
+    """The substantiated submission that follows it. Under FIDIC 2017
+    Sub-Clause 20.2.4 it is defined as including (a) a detailed description of
+    the event, (b) a statement of the contractual and/or other legal basis,
+    (c) the contemporary records relied on, and (d) detailed supporting
+    particulars of the amount and/or EOT claimed."""
+
+
 @dataclass(frozen=True)
 class NoticeRequirement:
     """A contractual notice obligation.
@@ -68,6 +95,16 @@ class NoticeRequirement:
             condition of entitlement. Drives severity, not the arithmetic.
         recipient: Who must receive it, e.g. "the Engineer".
         description: Human-readable summary.
+        obligation: Notice of Claim, or the fully detailed Claim that follows
+            it. Defaults to the former, which is what an unlabelled
+            project-specific requirement is most likely to be.
+        lapse_consequence: What the contract says happens if the period is
+            missed, where that is something other than a condition precedent
+            barring the claim. Set on FIDIC 2017 Sub-Clause 20.2.4, where
+            failing to submit the statement of contractual basis in time makes
+            the Notice of Claim lapse — a distinct mechanism from a time bar,
+            and a reversible one. Empty where the contract states no
+            consequence beyond the general law.
     """
 
     clause_number: str
@@ -78,6 +115,8 @@ class NoticeRequirement:
     is_condition_precedent: bool = False
     recipient: str = ""
     description: str = ""
+    obligation: Obligation = Obligation.NOTICE_OF_CLAIM
+    lapse_consequence: str = ""
 
     def __post_init__(self) -> None:
         if self.period_days < 0:
@@ -472,6 +511,10 @@ FIDIC_2017_FULLY_DETAILED_CLAIM = NoticeRequirement(
     is_condition_precedent=False,
     recipient="the Engineer",
     description="fully detailed Claim",
+    obligation=Obligation.DETAILED_CLAIM,
+    lapse_consequence=(
+        "Failure to submit the statement of the contractual and/or other legal basis within the period makes the Notice of Claim lapse: it is no longer a valid Notice. The Engineer must say so within 14 days, and if no such Notice is given the Notice of Claim is deemed valid after all."
+    ),
 )
 
 FIDIC_1987_NOTICE_OF_CLAIM = NoticeRequirement(
@@ -542,6 +585,7 @@ FIDIC_1999_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
         "Employer approves it, so check the correspondence before relying on "
         "the 42 days."
     ),
+    obligation=Obligation.DETAILED_CLAIM,
 )
 
 FIDIC_1999_RED_NOTICE_OF_CLAIM = NoticeRequirement(
@@ -578,6 +622,7 @@ FIDIC_1999_RED_FULLY_DETAILED_CLAIM = NoticeRequirement(
         "Fully detailed claim with full supporting particulars. Another period "
         "may be agreed with the Engineer."
     ),
+    obligation=Obligation.DETAILED_CLAIM,
 )
 
 # --- The rest of the 2017 suite -------------------------------------------
@@ -615,6 +660,10 @@ FIDIC_2017_YELLOW_FULLY_DETAILED_CLAIM = NoticeRequirement(
     is_condition_precedent=False,
     recipient="the Engineer",
     description="fully detailed Claim",
+    obligation=Obligation.DETAILED_CLAIM,
+    lapse_consequence=(
+        "Failure to submit the statement of the contractual and/or other legal basis within the period makes the Notice of Claim lapse: it is no longer a valid Notice. The Engineer must say so within 14 days, and if no such Notice is given the Notice of Claim is deemed valid after all."
+    ),
 )
 
 FIDIC_2017_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
@@ -646,6 +695,10 @@ FIDIC_2017_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
     is_condition_precedent=False,
     recipient="the Employer",
     description="fully detailed Claim",
+    obligation=Obligation.DETAILED_CLAIM,
+    lapse_consequence=(
+        "Failure to submit the statement of the contractual and/or other legal basis within the period makes the Notice of Claim lapse: it is no longer a valid Notice. The Engineer must say so within 14 days, and if no such Notice is given the Notice of Claim is deemed valid after all."
+    ),
 )
 
 KNOWN_REQUIREMENTS: tuple[NoticeRequirement, ...] = (
