@@ -92,6 +92,83 @@ export function fetchNoticeCompliance(claimId, config = {}) {
   return get(`/claims/${claimId}/notice-compliance/`, config)
 }
 
+// -- Documents filed on a claim ----------------------------------------------
+
+/** The claim document, notices and supporting documents filed on a claim. */
+export function listClaimFiles(claimId, config = {}) {
+  return get(`/claims/${claimId}/files/`, config)
+}
+
+/**
+ * File a document on a claim: a new upload (`file`) or one already in the
+ * project (`document`). `role` is `claim_submission`, `notice` or `supporting`;
+ * the rest says what makes it count — the date it was sent and the provision
+ * for a notice or the claim, the element it proves for support.
+ *
+ * Uploading also extracts and indexes the file, which runs inline on a
+ * machine with no task queue, so the request has no client timeout.
+ */
+export function attachClaimFile(claimId, fields, { onProgress } = {}) {
+  const form = new FormData()
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === '') continue
+    form.append(key, typeof value === 'boolean' ? String(value) : value)
+  }
+  return post(`/claims/${claimId}/files/`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
+    onUploadProgress: (event) => {
+      if (!onProgress || !event.total) return
+      onProgress(Math.round((event.loaded * 100) / event.total))
+    },
+  })
+}
+
+export function detachClaimFile(claimId, linkId) {
+  return del(`/claims/${claimId}/files/${linkId}/`)
+}
+
+// -- Checklist -----------------------------------------------------------------
+
+/** Is each event, notice, submission and piece of evidence on record and in time? */
+export function fetchClaimChecklist(claimId, config = {}) {
+  return get(`/claims/${claimId}/checklist/`, config)
+}
+
+/** The checklist for every claim matching `params`, e.g. `{ project }`. */
+export function fetchChecklists(params = {}, config = {}) {
+  return get('/claims/checklist/', { params, ...config })
+}
+
+// -- Contract deadlines --------------------------------------------------------
+
+/** The deadlines a project's claims face: standard, amended, or deleted. */
+export function fetchEffectiveDeadlines(projectId, config = {}) {
+  return get('/claims/contract-deadlines/effective/', { params: { project: projectId }, ...config })
+}
+
+export function listContractDeadlines(params = {}, config = {}) {
+  return get('/claims/contract-deadlines/', { params, ...config })
+}
+
+/** Recorded by hand from the contract, so confirmed as it is saved. */
+export function createContractDeadline(payload) {
+  return post('/claims/contract-deadlines/', payload)
+}
+
+export function updateContractDeadline(id, payload) {
+  return patch(`/claims/contract-deadlines/${id}/`, payload)
+}
+
+export function deleteContractDeadline(id) {
+  return del(`/claims/contract-deadlines/${id}/`)
+}
+
+/** Read the project's contract documents for amended periods. Suggests only. */
+export function scanContractDeadlines(projectId) {
+  return post('/claims/contract-deadlines/scan/', { project: projectId }, { timeout: 0 })
+}
+
 export function listEvidence(params = {}, config = {}) {
   return get('/evidence/', { params, ...config })
 }
@@ -123,4 +200,31 @@ export function updateClaimEvent(eventId, payload) {
 
 export function deleteClaimEvent(eventId) {
   return del(`/claims/events/${eventId}/`)
+}
+
+// -- Claim bundles -------------------------------------------------------------
+
+/**
+ * Upload a whole claim submission and split it into its letter and annexures.
+ * The split is a proposal; nothing is filed until `applyClaimBundle`.
+ */
+export function readClaimBundle({ projectId, file, document, allowDuplicate = false, onProgress }) {
+  const form = new FormData()
+  if (projectId) form.append('project', projectId)
+  if (file) form.append('file', file)
+  if (document) form.append('document', document)
+  if (allowDuplicate) form.append('allow_duplicate', 'true')
+  return post('/claims/bundle/read/', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
+    onUploadProgress: (event) => {
+      if (!onProgress || !event.total) return
+      onProgress(Math.round((event.loaded * 100) / event.total))
+    },
+  })
+}
+
+/** File a split bundle on a claim, creating the claim when `new_claim` is given. */
+export function applyClaimBundle(payload) {
+  return post('/claims/bundle/apply/', payload)
 }

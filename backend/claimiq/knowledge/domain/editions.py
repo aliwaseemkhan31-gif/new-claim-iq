@@ -351,6 +351,34 @@ EDITION_YELLOW_BOOK_2017 = ContractEdition(
     ),
 )
 
+EDITION_YELLOW_BOOK_1999 = ContractEdition(
+    code="yellow-book-1999",
+    form_code=FORM_FIDIC_YELLOW_BOOK.code,
+    year=1999,
+    label="FIDIC Yellow Book 1999 (1st Edition)",
+    topic_map=_topics(
+        TopicMapping(TOPIC_EMPLOYER_OBLIGATIONS, "2", "The Employer"),
+        TopicMapping(TOPIC_ENGINEER, "3", "The Engineer"),
+        TopicMapping(TOPIC_CONTRACTOR_OBLIGATIONS, "4", "The Contractor"),
+        TopicMapping(TOPIC_PHYSICAL_CONDITIONS, "4.12", "Unforeseeable Physical Conditions"),
+        TopicMapping(TOPIC_EXTENSION_OF_TIME, "8.4", "Extension of Time for Completion"),
+        TopicMapping(TOPIC_SUSPENSION, "8.8", "Suspension of Work"),
+        TopicMapping(TOPIC_VARIATIONS, "13", "Variations and Adjustments"),
+        TopicMapping(TOPIC_PAYMENT, "14", "Contract Price and Payment"),
+        TopicMapping(TOPIC_TERMINATION, "15", "Termination by Employer"),
+        TopicMapping(TOPIC_FORCE_MAJEURE, "19", "Force Majeure"),
+        TopicMapping(TOPIC_CLAIMS_PROCEDURE, "20.1", "Contractor's Claims"),
+        TopicMapping(TOPIC_DISPUTES, "20.4", "Obtaining Dispute Adjudication Board's Decision"),
+    ),
+    notes=(
+        "Plant and Design-Build, 1st Edition 1999. Registered so projects on "
+        "this form are representable and are never served another edition's "
+        "periods. Topic map follows the 1999 suite's common structure; no "
+        "knowledge-base content is held, so it has not been checked against "
+        "a source and retrieval fails cleanly until one is ingested."
+    ),
+)
+
 EDITION_SILVER_BOOK_1999 = ContractEdition(
     code="silver-book-1999",
     form_code=FORM_FIDIC_SILVER_BOOK.code,
@@ -399,6 +427,7 @@ DEFAULT_REGISTRY = EditionRegistry(
         EDITION_RED_BOOK_1987,
         EDITION_RED_BOOK_1999,
         EDITION_RED_BOOK_2017,
+        EDITION_YELLOW_BOOK_1999,
         EDITION_YELLOW_BOOK_2017,
         EDITION_SILVER_BOOK_1999,
         EDITION_SILVER_BOOK_2017,

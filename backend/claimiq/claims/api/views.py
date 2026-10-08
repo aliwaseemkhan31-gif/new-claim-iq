@@ -6,7 +6,7 @@ from django.db.models import QuerySet
 from django.utils import timezone
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -17,6 +17,7 @@ from claimiq.accounts.domain.permissions import (
     CLAIM_DELETE,
     CLAIM_EDIT,
     CLAIM_VIEW,
+    DOCUMENT_UPLOAD,
     EVIDENCE_MANAGE,
 )
 from claimiq.claims.domain.chronology import EntryKind
@@ -31,11 +32,13 @@ from claimiq.claims.models import (
     Claim,
     ClaimEvent,
     ClaimIssue,
+    ContractDeadline,
     Evidence,
 )
 from claimiq.claims.services.timeline import build_project_chronology
 from claimiq.core.api.permissions import access_for
 from claimiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
+from claimiq.documents.models import Document
 from claimiq.knowledge.domain.editions import DEFAULT_REGISTRY
 from claimiq.projects.models import Party, Project
 
@@ -484,11 +487,10 @@ class ClaimViewSet(viewsets.ModelViewSet):
         unknown awareness date yields INDETERMINATE rather than a guess — that
         date is the disputed fact in most notice arguments.
         """
-        from claimiq.claims.domain.notice_compliance import (
-            NoticeEvent,
-            assess_notice,
-            recipient_label,
-            requirements_for_edition,
+        from claimiq.claims.services.deadlines import (
+            assess_claim,
+            finding_payload,
+            requirements_for_claim,
         )
 
         claim = self.get_object()
@@ -505,8 +507,7 @@ class ClaimViewSet(viewsets.ModelViewSet):
                 },
             )
 
-        requirements = requirements_for_edition(edition)
-        if not requirements:
+        if not requirements_for_claim(claim):
             return Response(
                 {
                     "claim": str(claim.id),
@@ -520,34 +521,7 @@ class ClaimViewSet(viewsets.ModelViewSet):
                 }
             )
 
-        notices = [
-            NoticeEvent(
-                document_id=str(n.correspondence.document_id or n.correspondence_id),
-                document_title=n.correspondence.subject or "Notice",
-                sent_date=n.correspondence.sent_date,
-                received_date=n.correspondence.received_date,
-                recipient=(
-                    recipient_label(
-                        n.correspondence.recipient.name, n.correspondence.recipient.role
-                    )
-                    if n.correspondence.recipient
-                    else n.correspondence.recipient_raw
-                ),
-                is_confirmed_notice=n.is_confirmed_notice,
-                clause_number=n.clause_number,
-            )
-            for n in claim.notices.select_related(
-                "correspondence__recipient", "correspondence__document"
-            )
-        ]
-
-        findings = [
-            assess_notice(
-                requirement, awareness_date=claim.awareness_date, notices=notices
-            )
-            for requirement in requirements
-        ]
-
+        findings = assess_claim(claim)
         return Response(
             {
                 "claim": str(claim.id),
@@ -555,24 +529,183 @@ class ClaimViewSet(viewsets.ModelViewSet):
                 "awareness_date": (
                     claim.awareness_date.isoformat() if claim.awareness_date else None
                 ),
-                "findings": [
-                    {
-                        "clause_number": f.requirement.clause_number,
-                        "description": f.requirement.description,
-                        "status": f.status.value,
-                        "summary": f.summary(),
-                        "deadline": f.deadline.isoformat() if f.deadline else None,
-                        "days_used": f.days_used,
-                        "days_late": f.days_late,
-                        "is_time_barred": f.is_time_barred,
-                        "is_condition_precedent": f.requirement.is_condition_precedent,
-                        "assumptions": f.assumptions,
-                        "warnings": f.warnings,
-                    }
-                    for f in findings
-                ],
+                "findings": [finding_payload(f) for f in findings],
             }
         )
+
+    # -- Documents filed on the claim --------------------------------------
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        parser_classes=[MultiPartParser, FormParser, JSONParser],
+    )
+    def files(self, request: Request, pk: str | None = None) -> Response:
+        """The claim document, notices and supporting documents filed on a claim.
+
+        POST either uploads a new file (multipart ``file`` plus
+        ``document_type``) or files a document already in the project
+        (``document``), with ``role`` saying where it goes and the dates and
+        provision that make it count.
+        """
+        from claimiq.claims.services.claim_files import (
+            Attachment,
+            attach,
+            files_payload,
+            validate,
+        )
+
+        claim = self.get_object()
+        if request.method == "GET":
+            self._require(CLAIM_VIEW.code, str(claim.project_id))
+            return Response({"results": files_payload(claim)})
+
+        self._require(CLAIM_EDIT.code, str(claim.project_id))
+        data = request.data
+        role = str(data.get("role") or "")
+        details = Attachment(
+            role=role,
+            sent_date=_parse_date(data.get("sent_date"), "sent_date"),
+            received_date=_parse_date(data.get("received_date"), "received_date"),
+            clause_number=str(data.get("clause_number") or ""),
+            obligation=str(data.get("obligation") or ""),
+            confirmed=str(data.get("confirmed", "true")).lower() in ("1", "true", "yes", "on"),
+            element=str(data.get("element") or ""),
+            relevance=str(data.get("relevance") or "supports"),
+            note=str(data.get("note") or ""),
+        )
+        validate(details)
+
+        upload = request.FILES.get("file")
+        if upload is not None:
+            self._require(DOCUMENT_UPLOAD.code, str(claim.project_id))
+            from claimiq.documents.services.upload import upload_document
+
+            document_type = str(data.get("document_type") or _DEFAULT_TYPE.get(role, "other"))
+            result = upload_document(
+                project=claim.project,
+                upload=upload,
+                document_type=document_type,
+                user=request.user,
+                title=str(data.get("title") or ""),
+                reference=str(data.get("reference") or ""),
+                document_date=details.sent_date,
+                allow_duplicate=str(data.get("allow_duplicate", "")).lower()
+                in ("1", "true", "yes", "on"),
+            )
+            document = result.document
+        else:
+            document_id = data.get("document")
+            if not document_id:
+                raise ValidationError(
+                    "Attach a file, or choose a document already in the project.",
+                    details={"field": "file"},
+                )
+            document = Document.objects.filter(
+                pk=document_id, project_id=claim.project_id, deleted_at__isnull=True
+            ).first()
+            if document is None:
+                raise NotFoundError("That document is not in this claim's project.")
+
+        attach(claim, document, details, user=request.user)
+        return Response({"results": files_payload(claim)}, status=201)
+
+    # -- Claim bundles ------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bundle/read",
+        parser_classes=[MultiPartParser, FormParser, JSONParser],
+    )
+    def bundle_read(self, request: Request) -> Response:
+        """Upload a claim bundle and split it into its letter and annexures.
+
+        The file is stored like any project document. The split is a proposal;
+        nothing is filed on a claim until ``bundle/apply``.
+        """
+        from claimiq.claims.services.intake import document_summary, read_bundle, receive
+
+        document = receive(
+            request,
+            document_type=str(request.data.get("document_type") or "claim"),
+            permission_check=lambda project_id, permission: self._require(permission, str(project_id)),
+        )
+        return Response({"document": document_summary(document), **read_bundle(document)})
+
+    @action(detail=False, methods=["post"], url_path="bundle/apply")
+    def bundle_apply(self, request: Request) -> Response:
+        """File a split bundle on a claim, creating the claim if asked."""
+        from claimiq.claims.services.intake import apply_bundle
+
+        context = access_for(request)
+        document = Document.objects.filter(
+            pk=request.data.get("document"),
+            project__organization_id=getattr(context, "organization_id", None),
+            deleted_at__isnull=True,
+        ).select_related("project").first()
+        if document is None or document.project_id not in context.accessible_project_ids:
+            raise NotFoundError("That document does not exist.")
+        self._require(
+            CLAIM_CREATE.code if request.data.get("new_claim") else CLAIM_EDIT.code,
+            str(document.project_id),
+        )
+        return Response(apply_bundle(document, dict(request.data), user=request.user), status=201)
+
+    @action(detail=True, methods=["delete"], url_path=r"files/(?P<link_id>[^/.]+)")
+    def file_detail(self, request: Request, pk: str | None = None, link_id: str | None = None) -> Response:
+        from uuid import UUID
+
+        from claimiq.claims.services.claim_files import detach
+
+        claim = self.get_object()
+        self._require(CLAIM_EDIT.code, str(claim.project_id))
+        try:
+            key = UUID(str(link_id))
+        except ValueError:
+            raise NotFoundError("That document is not filed on this claim.") from None
+        detach(claim, key, user=request.user)
+        return Response(status=204)
+
+    # -- Checklist ---------------------------------------------------------
+
+    @action(detail=True, methods=["get"], url_path="checklist")
+    def checklist(self, request: Request, pk: str | None = None) -> Response:
+        """Is each event, notice, submission and piece of evidence on record and in time?"""
+        from claimiq.claims.services.checklist import for_claim
+
+        claim = self.get_object()
+        self._require(CLAIM_VIEW.code, str(claim.project_id))
+        return Response(for_claim(claim))
+
+    @action(detail=False, methods=["get"], url_path="checklist")
+    def checklist_list(self, request: Request) -> Response:
+        """The checklist for every claim the filters select, one project or all."""
+        from claimiq.claims.services.checklist import for_claims
+
+        claims = list(self.filter_queryset(self.get_queryset())[:MAX_SCREENING_ROWS])
+        return Response({"count": len(claims), "results": for_claims(claims)})
+
+
+#: The document type a file gets when filed without one.
+_DEFAULT_TYPE = {
+    "claim_submission": "claim",
+    "notice": "notice",
+    "supporting": "site_record",
+}
+
+
+def _parse_date(value, field: str):
+    from datetime import date as _date
+
+    if value in (None, ""):
+        return None
+    try:
+        return _date.fromisoformat(str(value))
+    except ValueError:
+        raise ValidationError(
+            "Use a date in the form YYYY-MM-DD.", details={"field": field}
+        ) from None
 
 
 def _relevance(value: str) -> Relevance:
@@ -693,3 +826,153 @@ class ClaimEventViewSet(viewsets.ModelViewSet):
         if context is None or not context.has(CLAIM_EDIT.code):
             raise PermissionDeniedError("Not permitted.")
         serializer.save(updated_by=self.request.user)
+
+
+class ContractDeadlineSerializer(serializers.ModelSerializer):
+    source_document_title = serializers.CharField(
+        source="source_document.title", read_only=True, default=None
+    )
+    confirmed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ContractDeadline
+        fields = (
+            "id", "project", "clause_number", "obligation", "action", "status",
+            "title", "period_days", "day_count", "runs_from", "runs_from_clause",
+            "applies_to", "is_condition_precedent", "recipient", "late_consequence",
+            "note", "source_document", "source_document_title", "source_page",
+            "source_excerpt", "confirmed_by_name", "confirmed_at", "created_at",
+        )
+        read_only_fields = ("id", "confirmed_at", "created_at")
+
+    def get_confirmed_by_name(self, obj) -> str | None:
+        user = obj.confirmed_by
+        if user is None:
+            return None
+        return user.get_full_name() or user.email
+
+    def validate(self, attrs):
+        def current(field, default=None):
+            return attrs.get(field, getattr(self.instance, field, default))
+
+        action_value = current("action", "amend")
+        period = current("period_days")
+        if action_value == ContractDeadline.Action.ADD and not period:
+            raise serializers.ValidationError(
+                {"period_days": "Give the number of days the contract allows."}
+            )
+        changes_something = period or any(
+            current(field) not in (None, "")
+            for field in (
+                "day_count", "runs_from", "applies_to", "is_condition_precedent",
+                "recipient", "late_consequence",
+            )
+        )
+        if action_value == ContractDeadline.Action.AMEND and not changes_something:
+            raise serializers.ValidationError(
+                {"period_days": "Say what the contract changes: the period, or another term."}
+            )
+        runs_from = attrs.get("runs_from", getattr(self.instance, "runs_from", ""))
+        runs_from_clause = attrs.get(
+            "runs_from_clause", getattr(self.instance, "runs_from_clause", "")
+        )
+        if runs_from == ContractDeadline.RunsFrom.NOTICE and not runs_from_clause:
+            raise serializers.ValidationError(
+                {"runs_from_clause": "Name the clause of the notice this period runs from."}
+            )
+        return attrs
+
+
+class ContractDeadlineViewSet(viewsets.ModelViewSet):
+    """Notice periods as the project's own contract sets them.
+
+    A row typed by a person is confirmed as it is saved. A row read from a
+    document arrives as a suggestion, and applies only once confirmed.
+    """
+
+    serializer_class = ContractDeadlineSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ["project", "status", "clause_number"]
+    ordering = ["clause_number", "obligation", "created_at"]
+
+    def get_queryset(self) -> QuerySet[ContractDeadline]:
+        context = access_for(self.request)
+        if context is None or context.organization_id is None:
+            return ContractDeadline.objects.none()
+        return ContractDeadline.objects.filter(
+            project__organization_id=context.organization_id,
+            project_id__in=context.accessible_project_ids,
+        ).select_related("source_document", "confirmed_by")
+
+    def _require(self, permission: str, project_id) -> None:
+        context = access_for(self.request, str(project_id))
+        if context is None or not context.has(permission):
+            raise PermissionDeniedError(
+                "You do not have permission to perform this action on this project.",
+                details={"required_permission": permission},
+            )
+
+    def _project(self, project_id) -> Project:
+        context = access_for(self.request)
+        project = Project.objects.filter(
+            pk=project_id, organization_id=getattr(context, "organization_id", None)
+        ).first()
+        if project is None or project.pk not in context.accessible_project_ids:
+            raise NotFoundError("The requested project does not exist.")
+        return project
+
+    def perform_create(self, serializer) -> None:
+        project = serializer.validated_data.get("project")
+        if project is None:
+            raise ValidationError("A 'project' is required.", details={"field": "project"})
+        self._require(CLAIM_EDIT.code, project.pk)
+        serializer.save(
+            created_by=self.request.user,
+            status=ContractDeadline.Status.CONFIRMED,
+            confirmed_by=self.request.user,
+            confirmed_at=timezone.now(),
+        )
+
+    def perform_update(self, serializer) -> None:
+        instance = serializer.instance
+        new_project = serializer.validated_data.get("project")
+        if new_project is not None and new_project.pk != instance.project_id:
+            raise ValidationError("A contract deadline cannot be moved to another project.")
+        self._require(CLAIM_EDIT.code, instance.project_id)
+        extra = {}
+        status_value = serializer.validated_data.get("status")
+        if status_value == ContractDeadline.Status.CONFIRMED and (
+            instance.status != ContractDeadline.Status.CONFIRMED
+        ):
+            extra = {"confirmed_by": self.request.user, "confirmed_at": timezone.now()}
+        elif status_value and status_value != ContractDeadline.Status.CONFIRMED:
+            extra = {"confirmed_by": None, "confirmed_at": None}
+        serializer.save(updated_by=self.request.user, **extra)
+
+    def perform_destroy(self, instance: ContractDeadline) -> None:
+        self._require(CLAIM_EDIT.code, instance.project_id)
+        instance.delete()
+
+    @action(detail=False, methods=["get"])
+    def effective(self, request: Request) -> Response:
+        """The deadlines the project's claims face, standard and amended."""
+        from claimiq.claims.services.contract_deadlines import effective_payload
+
+        project = self._project(request.query_params.get("project"))
+        self._require(CLAIM_VIEW.code, project.pk)
+        return Response(
+            {
+                "project": str(project.pk),
+                "edition": project.contract_edition or "",
+                "results": effective_payload(project),
+            }
+        )
+
+    @action(detail=False, methods=["post"])
+    def scan(self, request: Request) -> Response:
+        """Read the project's contract documents for amended periods."""
+        from claimiq.claims.services.contract_deadlines import scan
+
+        project = self._project(request.data.get("project"))
+        self._require(CLAIM_EDIT.code, project.pk)
+        return Response(scan(project, user=request.user))

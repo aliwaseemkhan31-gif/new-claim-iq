@@ -80,6 +80,33 @@ class Obligation(str, Enum):
     particulars of the amount and/or EOT claimed."""
 
 
+class PeriodStart(str, Enum):
+    """What starts a period running.
+
+    Most periods run from the event, or from awareness of it. Some run from an
+    earlier submission instead: FIDIC 1987 Sub-Clauses 44.2(b) and 53.3 allow
+    28 days for detailed particulars *after the notice*, so a late notice moves
+    the second deadline with it, and an unrecorded notice leaves it unknown.
+    """
+
+    AWARENESS = "awareness"
+    NOTICE = "notice"
+
+
+class Applies(str, Enum):
+    """Which claims a requirement governs.
+
+    The 1987 form runs two separate procedures: Clause 44 for extensions of
+    time and Clause 53 for additional payment. Checking an extension-of-time
+    claim against Clause 53 alone, as this module once did, reports on a
+    provision the claim was never made under.
+    """
+
+    ALL = "all"
+    TIME = "time"
+    MONEY = "money"
+
+
 @dataclass(frozen=True)
 class NoticeRequirement:
     """A contractual notice obligation.
@@ -105,6 +132,25 @@ class NoticeRequirement:
             the Notice of Claim lapse — a distinct mechanism from a time bar,
             and a reversible one. Empty where the contract states no
             consequence beyond the general law.
+        title: Short name, e.g. "Notice of claim (Sub-Clause 53.1)".
+        runs_from: What starts the period. ``NOTICE`` periods run from the
+            effective date of the notice given under ``runs_from_clause``.
+        runs_from_clause: The provision whose notice starts a ``NOTICE``
+            period.
+        applies_to: Which claims the requirement governs: all, those seeking
+            time, or those seeking money.
+        late_consequence: What the contract says follows from lateness where
+            it is not a condition precedent but is still adverse, e.g. FIDIC
+            1987 Sub-Clause 53.4 limiting recovery to what contemporary records
+            verify. Reported with a late finding so "late" is never read as
+            "harmless".
+        consequence_clause: The provision that states ``late_consequence``,
+            where it is not this one (FIDIC 1987 Sub-Clause 53.4 for 53.1 and
+            53.3). Read so that a contract deleting it is noticed.
+        source: Empty for the standard form. Where the project's own contract
+            documents amend or add the requirement, says where, e.g.
+            "Particular Conditions, p. 12". Shown wherever the requirement is,
+            so an amended period is never mistaken for the FIDIC default.
     """
 
     clause_number: str
@@ -117,6 +163,13 @@ class NoticeRequirement:
     description: str = ""
     obligation: Obligation = Obligation.NOTICE_OF_CLAIM
     lapse_consequence: str = ""
+    title: str = ""
+    runs_from: PeriodStart = PeriodStart.AWARENESS
+    runs_from_clause: str = ""
+    applies_to: Applies = Applies.ALL
+    late_consequence: str = ""
+    source: str = ""
+    consequence_clause: str = ""
 
     def __post_init__(self) -> None:
         if self.period_days < 0:
@@ -126,6 +179,25 @@ class NoticeRequirement:
                 "A notice requirement must name its edition: notice periods "
                 "differ between contract forms."
             )
+        if self.runs_from is PeriodStart.NOTICE and not self.runs_from_clause:
+            raise ValueError(
+                "A period that runs from a notice must name the provision that "
+                "notice is given under."
+            )
+
+    @property
+    def label(self) -> str:
+        """A short name for a list or checklist row."""
+        if self.title:
+            return self.title
+        if self.obligation is Obligation.DETAILED_CLAIM:
+            return "Fully detailed claim"
+        return "Notice of claim"
+
+    @property
+    def is_amended(self) -> bool:
+        """True where the project's own contract documents set this requirement."""
+        return bool(self.source)
 
 
 @dataclass(frozen=True)
@@ -147,6 +219,23 @@ class NoticeEvent:
     """The provision the notice is given under. A notice under one provision
     does not satisfy another: a Notice of Claim is not a fully detailed claim.
     Blank means not recorded, and is evaluated with a warning."""
+
+    obligation: Obligation | None = None
+    """Whether this is the notice or the detailed submission that follows it.
+
+    Needed where one provision imposes both: FIDIC 1987 Sub-Clause 44.2 and the
+    1999 Sub-Clause 20.1 each require a notice and then detailed particulars
+    under the same clause number, so the clause alone cannot say which a
+    document is. None means not recorded, and the document counts towards
+    either, as it did before the distinction existed."""
+
+    record_id: str = ""
+    """Identifies this record when several share one document: notices bound
+    into a claim bundle are each a record, but all point at the bundle."""
+
+    @property
+    def key(self) -> str:
+        return self.record_id or self.document_id
 
     @property
     def effective_date(self) -> date | None:
@@ -216,6 +305,8 @@ def given_under(notice: NoticeEvent, requirement: NoticeRequirement) -> bool:
     notice under a parent or sibling provision does not count: which provision
     a notice satisfies is a question for a person, not a prefix match.
     """
+    if notice.obligation is not None and notice.obligation is not requirement.obligation:
+        return False
     clause = notice.clause_number.strip()
     return not clause or clause == requirement.clause_number
 
@@ -316,6 +407,7 @@ def assess_notice(
     notices: Sequence[NoticeEvent] = (),
     holidays: Iterable[date] = (),
     weekend: frozenset[int] = DEFAULT_WEEKEND,
+    period_start_label: str = "the awareness date",
 ) -> ComplianceFinding:
     """Assess compliance with one notice requirement.
 
@@ -329,6 +421,9 @@ def assess_notice(
             qualifying notice.
         holidays: Non-working days, for a working-day period.
         weekend: Weekday indices treated as weekend.
+        period_start_label: How the start of the period is described in a
+            warning. :func:`assess_requirements` passes the notice a period
+            runs from.
 
     Returns:
         A finding with its assumptions and warnings exposed.
@@ -337,12 +432,18 @@ def assess_notice(
     warnings: list[str] = []
 
     if awareness_date is None:
+        # The timing cannot be assessed, but whether anything was given at all
+        # still can. Without this, "is a detailed claim on record?" read an
+        # unknown awareness date as an answer.
+        dated = [
+            n for n in notices if given_under(n, requirement) and n.effective_date is not None
+        ]
         return ComplianceFinding(
             status=ComplianceStatus.INDETERMINATE,
             requirement=requirement,
             awareness_date=None,
             deadline=None,
-            notice=None,
+            notice=min(dated, key=lambda n: n.effective_date) if dated else None,  # type: ignore[arg-type]
             warnings=[
                 "The date on which the claiming Party became aware, or should "
                 "have become aware, of the event is not established by the "
@@ -430,8 +531,8 @@ def assess_notice(
 
     if days_used < 0:
         warnings.append(
-            "The notice predates the awareness date. Either the notice relates "
-            "to a different event, or one of the dates is wrong."
+            f"The notice predates {period_start_label}. Either the notice "
+            f"relates to a different event, or one of the dates is wrong."
         )
         return ComplianceFinding(
             status=ComplianceStatus.INDETERMINATE,
@@ -459,6 +560,8 @@ def assess_notice(
     days_late = count_days(
         deadline, effective, requirement.day_count, holidays=holidays, weekend=weekend
     )
+    if requirement.late_consequence:
+        warnings.append(requirement.late_consequence)
     if requirement.is_condition_precedent:
         warnings.append(
             "The provision is expressed as a condition precedent. Whether a "
@@ -489,6 +592,7 @@ def assess_notice(
 # --------------------------------------------------------------------------
 
 FIDIC_2017_NOTICE_OF_CLAIM = NoticeRequirement(
+    title="Notice of Claim (Sub-Clause 20.2.1)",
     clause_number="20.2.1",
     edition="red-book-2017",
     period_days=28,
@@ -503,6 +607,7 @@ FIDIC_2017_NOTICE_OF_CLAIM = NoticeRequirement(
 )
 
 FIDIC_2017_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    title="Fully detailed Claim (Sub-Clause 20.2.4)",
     clause_number="20.2.4",
     edition="red-book-2017",
     period_days=84,
@@ -517,6 +622,86 @@ FIDIC_2017_FULLY_DETAILED_CLAIM = NoticeRequirement(
     ),
 )
 
+# --- The 1987 form --------------------------------------------------------
+#
+# Two procedures, not one. Clause 44 governs extensions of time and Clause 53
+# governs additional payment, and each has a notice followed by detailed
+# particulars that run from the notice rather than from the event. Verified
+# against the Red Book 1987 text held in this installation's knowledge base:
+#
+#   44.2 "Provided that the Engineer is not bound to make any determination
+#        unless the Contractor has (a) within 28 days after such event has
+#        first arisen notified the Engineer with a copy to the Employer, and
+#        (b) within 28 days, or such other reasonable time as may be agreed by
+#        the Engineer, after such notification submitted to the Engineer
+#        detailed particulars of any extension of time ..."
+#   53.1 "... he shall give notice of his intention to the Engineer, with a
+#        copy to the Employer, within 28 days after the event giving rise to
+#        the claim has first arisen."
+#   53.3 "Within 28 days, or such other reasonable time as may be agreed by the
+#        Engineer, of giving notice under Sub-Clause 53.1, the Contractor shall
+#        send to the Engineer an account giving detailed particulars ..."
+#   53.4 "If the Contractor fails to comply ... his entitlement to payment ...
+#        shall not exceed such amount as the Engineer ... considers to be
+#        verified by contemporary records ..."
+#
+# Neither is framed as a condition precedent in the 2017 manner, so neither is
+# reported as a time bar. Each states its own adverse consequence instead,
+# carried as ``late_consequence``.
+
+_CONSEQUENCE_1987_44 = (
+    "Under Sub-Clause 44.2 the Engineer is not bound to make any determination "
+    "of extension of time unless the notice and particulars were given in time. "
+    "Whether that defeats the claim is a legal question; it is not a condition "
+    "precedent in the 2017 form's terms."
+)
+
+_CONSEQUENCE_1987_53 = (
+    "Under Sub-Clause 53.4, failure to comply limits entitlement to the amount "
+    "the Engineer or an arbitrator considers verified by contemporary records. "
+    "The claim is not barred, but unrecorded cost is at risk."
+)
+
+FIDIC_1987_EOT_NOTICE = NoticeRequirement(
+    clause_number="44.2",
+    edition="red-book-1987",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description="the event first arising",
+    is_condition_precedent=False,
+    recipient="the Engineer",
+    title="Notice of the delay event (Sub-Clause 44.2(a))",
+    description=(
+        "Notification to the Engineer, with a copy to the Employer, within 28 "
+        "days after the event has first arisen."
+    ),
+    applies_to=Applies.TIME,
+    late_consequence=_CONSEQUENCE_1987_44,
+)
+
+FIDIC_1987_EOT_PARTICULARS = NoticeRequirement(
+    clause_number="44.2",
+    edition="red-book-1987",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description="the notification under Sub-Clause 44.2(a)",
+    is_condition_precedent=False,
+    recipient="the Engineer",
+    title="Detailed particulars of the extension (Sub-Clause 44.2(b))",
+    description=(
+        "Detailed particulars of the extension of time claimed, within 28 days "
+        "after the notification, or such other reasonable time as the Engineer "
+        "agrees. Where the event has a continuing effect, Sub-Clause 44.3 "
+        "allows interim particulars at intervals of not more than 28 days and "
+        "final particulars within 28 days of the end of its effects."
+    ),
+    obligation=Obligation.DETAILED_CLAIM,
+    runs_from=PeriodStart.NOTICE,
+    runs_from_clause="44.2",
+    applies_to=Applies.TIME,
+    late_consequence=_CONSEQUENCE_1987_44,
+)
+
 FIDIC_1987_NOTICE_OF_CLAIM = NoticeRequirement(
     clause_number="53.1",
     edition="red-book-1987",
@@ -525,11 +710,39 @@ FIDIC_1987_NOTICE_OF_CLAIM = NoticeRequirement(
     trigger_description="the event giving rise to the claim first arising",
     is_condition_precedent=False,
     recipient="the Engineer",
+    title="Notice of intention to claim (Sub-Clause 53.1)",
     description=(
         "Notice of intention to claim. The 1987 form is not generally framed as "
         "a condition precedent in the manner of the 2017 form, and the "
         "consequences of late notice differ accordingly."
     ),
+    applies_to=Applies.MONEY,
+    late_consequence=_CONSEQUENCE_1987_53,
+    consequence_clause="53.4",
+)
+
+FIDIC_1987_ACCOUNT = NoticeRequirement(
+    clause_number="53.3",
+    edition="red-book-1987",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description="giving notice under Sub-Clause 53.1",
+    is_condition_precedent=False,
+    recipient="the Engineer",
+    title="Account with detailed particulars (Sub-Clause 53.3)",
+    description=(
+        "An account giving detailed particulars of the amount claimed and its "
+        "grounds, within 28 days of giving notice under Sub-Clause 53.1, or "
+        "such other reasonable time as the Engineer agrees. A continuing event "
+        "calls for interim accounts and a final account within 28 days of the "
+        "end of its effects."
+    ),
+    obligation=Obligation.DETAILED_CLAIM,
+    runs_from=PeriodStart.NOTICE,
+    runs_from_clause="53.1",
+    applies_to=Applies.MONEY,
+    late_consequence=_CONSEQUENCE_1987_53,
+    consequence_clause="53.4",
 )
 
 # --- The 1999 suite -------------------------------------------------------
@@ -551,6 +764,7 @@ FIDIC_1987_NOTICE_OF_CLAIM = NoticeRequirement(
 #    the claim."
 
 FIDIC_1999_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
+    title="Notice of claim (Sub-Clause 20.1)",
     clause_number="20.1",
     edition="silver-book-1999",
     period_days=28,
@@ -569,6 +783,7 @@ FIDIC_1999_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
 )
 
 FIDIC_1999_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    title="Fully detailed claim (Sub-Clause 20.1)",
     clause_number="20.1",
     edition="silver-book-1999",
     period_days=42,
@@ -589,6 +804,7 @@ FIDIC_1999_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
 )
 
 FIDIC_1999_RED_NOTICE_OF_CLAIM = NoticeRequirement(
+    title="Notice of claim (Sub-Clause 20.1)",
     clause_number="20.1",
     edition="red-book-1999",
     period_days=28,
@@ -608,8 +824,54 @@ FIDIC_1999_RED_NOTICE_OF_CLAIM = NoticeRequirement(
 )
 
 FIDIC_1999_RED_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    title="Fully detailed claim (Sub-Clause 20.1)",
     clause_number="20.1",
     edition="red-book-1999",
+    period_days=42,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the Contractor became aware, or should have become aware, "
+        "of the event or circumstance"
+    ),
+    is_condition_precedent=False,
+    recipient="the Engineer",
+    description=(
+        "Fully detailed claim with full supporting particulars. Another period "
+        "may be agreed with the Engineer."
+    ),
+    obligation=Obligation.DETAILED_CLAIM,
+)
+
+# --- Yellow Book 1999 -----------------------------------------------------
+#
+# Sub-Clause 20.1 is common to the 1999 suite. This installation holds no
+# Yellow Book 1999 text, so these are taken from the Silver Book 1999 wording
+# verified above, with the Engineer as recipient as in the Red Book. Confirm
+# against the contract before relying on them.
+
+FIDIC_1999_YELLOW_NOTICE_OF_CLAIM = NoticeRequirement(
+    title="Notice of claim (Sub-Clause 20.1)",
+    clause_number="20.1",
+    edition="yellow-book-1999",
+    period_days=28,
+    day_count=DayCount.CALENDAR,
+    trigger_description=(
+        "the date the Contractor became aware, or should have become aware, "
+        "of the event or circumstance"
+    ),
+    is_condition_precedent=True,
+    recipient="the Engineer",
+    description=(
+        "Notice of claim, from the 1999 suite's common Sub-Clause 20.1. Not "
+        "verified against a Yellow Book 1999 text held here; confirm against "
+        "the contract before relying on it."
+    ),
+)
+
+FIDIC_1999_YELLOW_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    title="Fully detailed claim (Sub-Clause 20.1)",
+    clause_number="20.1",
+    edition="yellow-book-1999",
     period_days=42,
     day_count=DayCount.CALENDAR,
     trigger_description=(
@@ -638,6 +900,7 @@ FIDIC_1999_RED_FULLY_DETAILED_CLAIM = NoticeRequirement(
 #    connection with the event or circumstance giving rise to the Claim."
 
 FIDIC_2017_YELLOW_NOTICE_OF_CLAIM = NoticeRequirement(
+    title="Notice of Claim (Sub-Clause 20.2.1)",
     clause_number="20.2.1",
     edition="yellow-book-2017",
     period_days=28,
@@ -652,6 +915,7 @@ FIDIC_2017_YELLOW_NOTICE_OF_CLAIM = NoticeRequirement(
 )
 
 FIDIC_2017_YELLOW_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    title="Fully detailed Claim (Sub-Clause 20.2.4)",
     clause_number="20.2.4",
     edition="yellow-book-2017",
     period_days=84,
@@ -667,6 +931,7 @@ FIDIC_2017_YELLOW_FULLY_DETAILED_CLAIM = NoticeRequirement(
 )
 
 FIDIC_2017_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
+    title="Notice of Claim (Sub-Clause 20.2.1)",
     clause_number="20.2.1",
     edition="silver-book-2017",
     period_days=28,
@@ -687,6 +952,7 @@ FIDIC_2017_SILVER_NOTICE_OF_CLAIM = NoticeRequirement(
 )
 
 FIDIC_2017_SILVER_FULLY_DETAILED_CLAIM = NoticeRequirement(
+    title="Fully detailed Claim (Sub-Clause 20.2.4)",
     clause_number="20.2.4",
     edition="silver-book-2017",
     period_days=84,
@@ -710,9 +976,14 @@ KNOWN_REQUIREMENTS: tuple[NoticeRequirement, ...] = (
     FIDIC_2017_SILVER_FULLY_DETAILED_CLAIM,
     FIDIC_1999_RED_NOTICE_OF_CLAIM,
     FIDIC_1999_RED_FULLY_DETAILED_CLAIM,
+    FIDIC_1999_YELLOW_NOTICE_OF_CLAIM,
+    FIDIC_1999_YELLOW_FULLY_DETAILED_CLAIM,
     FIDIC_1999_SILVER_NOTICE_OF_CLAIM,
     FIDIC_1999_SILVER_FULLY_DETAILED_CLAIM,
+    FIDIC_1987_EOT_NOTICE,
+    FIDIC_1987_EOT_PARTICULARS,
     FIDIC_1987_NOTICE_OF_CLAIM,
+    FIDIC_1987_ACCOUNT,
 )
 
 
@@ -724,3 +995,238 @@ def requirements_for_edition(edition: str) -> tuple[NoticeRequirement, ...]:
     error ADR 0004 exists to prevent.
     """
     return tuple(r for r in KNOWN_REQUIREMENTS if r.edition == edition)
+
+
+# --------------------------------------------------------------------------
+# Which requirements govern a claim, and assessing them together
+# --------------------------------------------------------------------------
+
+#: Mirrors ``analysis.domain.strands.TIME_CLAIM_TYPES``. Restated rather than
+#: imported so this module keeps no dependency on the analysis app; a test
+#: holds the two together.
+TIME_CLAIM_TYPES = frozenset(
+    {"eot", "delay", "disruption", "acceleration", "compensation_event"}
+)
+
+#: Mirrors ``analysis.domain.strands.MONEY_CLAIM_TYPES``.
+MONEY_CLAIM_TYPES = frozenset(
+    {"cost", "variation", "disruption", "acceleration", "payment", "compensation_event"}
+)
+
+
+def applicable_requirements(
+    requirements: Sequence[NoticeRequirement],
+    *,
+    claim_type: str,
+    seeks_time: bool = False,
+    seeks_money: bool = False,
+) -> tuple[NoticeRequirement, ...]:
+    """The requirements that govern a claim of this kind.
+
+    A claim seeks time when its type is a time type or a time is claimed, and
+    money likewise. Where neither can be said, every requirement is kept: a
+    claim whose relief is not yet recorded should be shown all the deadlines it
+    might face, not none of them.
+    """
+    time = seeks_time or claim_type in TIME_CLAIM_TYPES
+    money = seeks_money or claim_type in MONEY_CLAIM_TYPES
+    if not time and not money:
+        return tuple(requirements)
+    return tuple(
+        r
+        for r in requirements
+        if r.applies_to is Applies.ALL
+        or (r.applies_to is Applies.TIME and time)
+        or (r.applies_to is Applies.MONEY and money)
+    )
+
+
+def assess_requirements(
+    requirements: Sequence[NoticeRequirement],
+    *,
+    awareness_date: date | None,
+    notices: Sequence[NoticeEvent] = (),
+    holidays: Iterable[date] = (),
+    weekend: frozenset[int] = DEFAULT_WEEKEND,
+) -> list[ComplianceFinding]:
+    """Assess every requirement for a claim, in the order given.
+
+    Periods that run from awareness are assessed first, so a period that runs
+    from a notice can start from the notice that satisfied its anchor. Where
+    that notice is not on record the dependent period has no start, and the
+    finding says so rather than borrowing the awareness date.
+    """
+    findings: dict[int, ComplianceFinding] = {}
+    for index, requirement in enumerate(requirements):
+        if requirement.runs_from is PeriodStart.AWARENESS:
+            findings[index] = assess_notice(
+                requirement,
+                awareness_date=awareness_date,
+                notices=notices,
+                holidays=holidays,
+                weekend=weekend,
+            )
+
+    for index, requirement in enumerate(requirements):
+        if requirement.runs_from is not PeriodStart.NOTICE:
+            continue
+        anchor = next(
+            (
+                f
+                for f in findings.values()
+                if f.requirement.clause_number == requirement.runs_from_clause
+                and f.requirement.obligation is Obligation.NOTICE_OF_CLAIM
+                and f.notice is not None
+                and f.notice.effective_date is not None
+            ),
+            None,
+        )
+        if anchor is None:
+            findings[index] = ComplianceFinding(
+                status=ComplianceStatus.INDETERMINATE,
+                requirement=requirement,
+                awareness_date=None,
+                deadline=None,
+                notice=None,
+                warnings=[
+                    f"This period runs from the notice under Clause "
+                    f"{requirement.runs_from_clause}, and no dated notice under "
+                    f"it is on record. Record that notice and the deadline "
+                    f"follows from it."
+                ],
+            )
+            continue
+
+        start_notice = anchor.notice
+        assert start_notice is not None and start_notice.effective_date is not None
+        # The notice that starts the period cannot also be the submission
+        # that answers it.
+        others = [n for n in notices if n.key != start_notice.key]
+        finding = assess_notice(
+            requirement,
+            awareness_date=start_notice.effective_date,
+            notices=others,
+            holidays=holidays,
+            weekend=weekend,
+            period_start_label="the notice it follows",
+        )
+        finding.assumptions.insert(
+            0,
+            f"The period runs from the notice under Clause "
+            f"{requirement.runs_from_clause} ({start_notice.document_title!r}), "
+            f"effective {start_notice.effective_date.isoformat()}.",
+        )
+        findings[index] = finding
+
+    return [findings[i] for i in range(len(requirements))]
+
+
+# --------------------------------------------------------------------------
+# The project's own contract: amendments to the standard requirements
+# --------------------------------------------------------------------------
+
+
+class AmendmentAction(str, Enum):
+    AMEND = "amend"
+    """Replaces the standard requirement under the same clause and obligation."""
+
+    ADD = "add"
+    """A requirement the standard form does not impose."""
+
+    REMOVE = "remove"
+    """The contract deletes the standard requirement."""
+
+
+@dataclass(frozen=True)
+class Amendment:
+    """A requirement as the project's contract documents state it.
+
+    Confirmed by a person before it is applied: a period read from a
+    Particular Conditions page is a reading, and an amended deadline applied on
+    a misreading moves every finding that depends on it.
+    """
+
+    clause_number: str
+    obligation: Obligation
+    action: AmendmentAction = AmendmentAction.AMEND
+    period_days: int | None = None
+    day_count: DayCount | None = None
+    is_condition_precedent: bool | None = None
+    recipient: str | None = None
+    runs_from: PeriodStart | None = None
+    runs_from_clause: str | None = None
+    applies_to: Applies | None = None
+    title: str = ""
+    description: str = ""
+    late_consequence: str | None = None
+    source: str = "the project's contract documents"
+
+
+def apply_amendments(
+    standard: Sequence[NoticeRequirement],
+    amendments: Sequence[Amendment],
+    *,
+    edition: str,
+) -> tuple[NoticeRequirement, ...]:
+    """The requirements that apply once the contract's own terms are read.
+
+    The Particular Conditions take precedence over the general conditions
+    where they conflict, so an amendment replaces the standard requirement it
+    matches (same clause, same obligation), keeping whatever it does not
+    change. Unmatched amendments are added; removals drop the match.
+    """
+    from dataclasses import replace
+
+    result = list(standard)
+    for amendment in amendments:
+        match = next(
+            (
+                i
+                for i, r in enumerate(result)
+                if r.clause_number == amendment.clause_number
+                and r.obligation is amendment.obligation
+            ),
+            None,
+        )
+        if amendment.action is AmendmentAction.REMOVE:
+            if match is not None:
+                result.pop(match)
+            continue
+
+        changes = {
+            key: value
+            for key, value in (
+                ("period_days", amendment.period_days),
+                ("day_count", amendment.day_count),
+                ("is_condition_precedent", amendment.is_condition_precedent),
+                ("recipient", amendment.recipient),
+                ("runs_from", amendment.runs_from),
+                ("runs_from_clause", amendment.runs_from_clause),
+                ("applies_to", amendment.applies_to),
+                ("late_consequence", amendment.late_consequence),
+            )
+            if value is not None
+        }
+        if amendment.title:
+            changes["title"] = amendment.title
+        if amendment.description:
+            changes["description"] = amendment.description
+
+        if match is not None and amendment.action is AmendmentAction.AMEND:
+            result[match] = replace(result[match], source=amendment.source, **changes)
+            continue
+
+        if amendment.period_days is None:
+            # An addition with no period cannot be assessed; skip it rather
+            # than invent one.
+            continue
+        result.append(
+            NoticeRequirement(
+                clause_number=amendment.clause_number,
+                edition=edition,
+                obligation=amendment.obligation,
+                source=amendment.source,
+                **changes,
+            )
+        )
+    return tuple(result)

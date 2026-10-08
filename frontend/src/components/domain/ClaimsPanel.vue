@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import * as claimsApi from '@/api/claims'
 import * as projectsApi from '@/api/projects'
 import AppButton from '@/components/common/AppButton.vue'
+import ClaimBundleDialog from '@/components/domain/ClaimBundleDialog.vue'
 import AppDialog from '@/components/common/AppDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -35,6 +36,8 @@ import { rowsOf } from '@/utils/viewer'
  */
 const props = defineProps({
   projectId: { type: String, default: null },
+  /** Off where the page offers its own upload, so there is one button, not two. */
+  allowUpload: { type: Boolean, default: true },
   showProject: { type: Boolean, default: false },
 })
 
@@ -178,6 +181,13 @@ watch(snapshot, load)
 function open(claim) {
   router.push({ name: 'claim-detail', params: { claimId: claim.id } })
 }
+
+function openDocuments(claim) {
+  router.push({ name: 'claim-detail', params: { claimId: claim.id }, query: { tab: 'documents' } })
+}
+
+// A whole submission — letter and annexures — read and split in one go.
+const bundleOpen = ref(false)
 
 // -- Drafting from a document ------------------------------------------------
 //
@@ -522,15 +532,24 @@ onMounted(load)
         v-if="canCreate && projectId"
         variant="ghost"
         icon="pi pi-camera"
-        label="From a document"
+        label="From a photo"
+        title="Fill in the claim form from a photographed or scanned claim. The file is not kept."
         @click="openDraft"
       />
       <AppButton
         v-if="canCreate"
-        variant="primary"
+        variant="secondary"
         icon="pi pi-plus"
         label="New claim"
         @click="openCreate"
+      />
+      <AppButton
+        v-if="canCreate && projectId && allowUpload"
+        variant="primary"
+        icon="pi pi-upload"
+        label="Upload claim"
+        title="Upload the claim letter with its supporting documents in one PDF"
+        @click="bundleOpen = true"
       />
     </div>
 
@@ -622,6 +641,15 @@ onMounted(load)
               <td><StatusBadge :status="claim.human_outcome" size="sm" /></td>
               <td>{{ formatRelative(claim.updated_at) }}</td>
               <td class="cell-actions">
+                <AppButton
+                  variant="ghost"
+                  size="sm"
+                  icon="pi pi-paperclip"
+                  label="Documents"
+                  :title="`Documents filed on ${claim.title}`"
+                  @click.stop="openDocuments(claim)"
+                  @keydown.enter.stop
+                />
                 <AppButton
                   v-if="canEdit(claim)"
                   variant="ghost"
@@ -910,6 +938,7 @@ onMounted(load)
         />
       </template>
     </AppDialog>
+    <ClaimBundleDialog v-if="projectId" v-model="bundleOpen" :project-id="projectId" @applied="load" />
   </div>
 </template>
 

@@ -22,13 +22,13 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 
 from claimiq.claims.domain.evidence_gaps import elements_for
-from claimiq.claims.domain.notice_compliance import (
-    NoticeEvent,
-    assess_notice,
-    recipient_label,
-    requirements_for_edition,
-)
+from claimiq.claims.domain.notice_compliance import NoticeEvent, assess_requirements
 from claimiq.claims.domain.screening import ScreeningInput, ScreeningReport, screen_claim
+from claimiq.claims.services.deadlines import (
+    notice_events,
+    requirements_for_claim,
+    requirements_for_project,
+)
 from claimiq.core.domain.errors import NotFoundError
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
@@ -50,6 +50,14 @@ class _EditionFacts:
         self._published: Dict[str, bool] = {}
         self._clauses: Dict[str, frozenset] = {}
         self._labels: Dict[str, str] = {}
+        self._requirements: Dict[str, tuple] = {}
+
+    def requirements(self, project) -> tuple:
+        """The project's requirements, with its confirmed amendments applied."""
+        key = str(project.pk)
+        if key not in self._requirements:
+            self._requirements[key] = requirements_for_project(project)
+        return self._requirements[key]
 
     def label(self, edition_code: str) -> str:
         if not edition_code:
@@ -110,34 +118,8 @@ class _EditionFacts:
 
 
 def _notice_events(notices: Iterable) -> List[NoticeEvent]:
-    """Build notice events from already-loaded Notice rows.
-
-    Takes rows rather than a claim so the same code serves one claim and a
-    prefetched page of them.
-    """
-    events: List[NoticeEvent] = []
-    for notice in notices:
-        item = notice.correspondence
-        if item.deleted_at is not None:
-            continue
-        recipient = (
-            recipient_label(item.recipient.name, item.recipient.role)
-            if item.recipient_id
-            else item.recipient_raw
-        )
-        events.append(
-            NoticeEvent(
-                document_id=str(item.document_id or item.id),
-                document_title=item.subject or item.reference or "Notice",
-                sent_date=item.sent_date,
-                received_date=item.received_date,
-                subject=item.subject,
-                recipient=recipient,
-                is_confirmed_notice=notice.is_confirmed_notice,
-                clause_number=notice.clause_number,
-            )
-        )
-    return events
+    """Build notice events from already-loaded Notice rows."""
+    return notice_events(notices)
 
 
 def _build(
@@ -155,11 +137,14 @@ def _build(
     )
     found = editions.clauses(edition_code)
 
-    requirements = requirements_for_edition(edition_code) if edition_code else ()
+    requirements = (
+        requirements_for_claim(claim, project_requirements=editions.requirements(claim.project))
+        if edition_code
+        else ()
+    )
     events = _notice_events(notices)
     findings = tuple(
-        assess_notice(requirement, awareness_date=claim.awareness_date, notices=events)
-        for requirement in requirements
+        assess_requirements(requirements, awareness_date=claim.awareness_date, notices=events)
     )
 
     return ScreeningInput(

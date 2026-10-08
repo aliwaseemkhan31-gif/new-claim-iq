@@ -75,8 +75,9 @@ from claimiq.claims.domain.evidence_gaps import (
 from claimiq.claims.domain.notice_compliance import (
     ComplianceFinding,
     NoticeEvent,
-    assess_notice,
-    recipient_label,
+    NoticeRequirement,
+    assess_requirements,
+    recipient_label,  # noqa: F401 - re-exported; tests import it from here
     requirements_for_edition,
 )
 from claimiq.claims.models import Claim
@@ -220,10 +221,19 @@ def facts_from_dict(data: Mapping[str, Any]) -> ClaimFacts:
     )
 
 
-def notice_clause_numbers_for(edition_code: str) -> list[str]:
+def notice_clause_numbers_for(
+    edition_code: str, requirements: Sequence[NoticeRequirement] | None = None
+) -> list[str]:
+    """Clause numbers the notice strand retrieves.
+
+    From the claim's own requirements where known, so an amended or
+    claim-specific provision (1987 Clause 44 for a time claim) is the one read.
+    """
+    if requirements is not None:
+        return list(dict.fromkeys(r.clause_number for r in requirements))
     if not edition_code:
         return []
-    return [r.clause_number for r in requirements_for_edition(edition_code)]
+    return list(dict.fromkeys(r.clause_number for r in requirements_for_edition(edition_code)))
 
 
 # ---------------------------------------------------------------------------
@@ -287,18 +297,25 @@ class NoticeComputation:
 
 
 def compute_notice_timing(
-    edition_code: str, awareness_date: date | None, notices: Sequence[NoticeEvent]
+    edition_code: str,
+    awareness_date: date | None,
+    notices: Sequence[NoticeEvent],
+    *,
+    requirements: Sequence[NoticeRequirement] | None = None,
 ) -> NoticeComputation:
-    """Deterministic notice timing for every requirement the edition registers.
+    """Deterministic notice timing for every requirement governing the claim.
 
     The model never recalculates this. It is handed ``prompt_text`` and asked
     only to explain what the computed result means.
+
+    Args:
+        requirements: The claim's requirements, amended by the project's
+            contract and narrowed to its relief. The edition's standard
+            requirements when not given.
     """
-    requirements = requirements_for_edition(edition_code) if edition_code else ()
-    findings = [
-        assess_notice(requirement, awareness_date=awareness_date, notices=notices)
-        for requirement in requirements
-    ]
+    if requirements is None:
+        requirements = requirements_for_edition(edition_code) if edition_code else ()
+    findings = assess_requirements(requirements, awareness_date=awareness_date, notices=notices)
 
     computed = {
         "edition": edition_code,
@@ -307,7 +324,9 @@ def compute_notice_timing(
         "findings": [
             {
                 "clause_number": f.requirement.clause_number,
+                "title": f.requirement.label,
                 "description": f.requirement.description,
+                "source": f.requirement.source,
                 "status": f.status.value,
                 "summary": f.summary(),
                 "deadline": _iso(f.deadline),
@@ -324,8 +343,9 @@ def compute_notice_timing(
 
     lines: list[str] = []
     for f in findings:
+        amended = f" [as amended by {f.requirement.source}]" if f.requirement.source else ""
         lines.append(
-            f"Clause {f.requirement.clause_number} ({f.requirement.description}): {f.summary()}"
+            f"Clause {f.requirement.clause_number} ({f.requirement.label}){amended}: {f.summary()}"
         )
         lines.append(
             f"  Deadline: {f.deadline.isoformat() if f.deadline else 'cannot be computed'}"
@@ -475,6 +495,7 @@ def run_notice_strand(
     scope: RetrievalScope,
     answering,
     retrieval_query: str | None = None,
+    requirements: Sequence[NoticeRequirement] | None = None,
 ) -> StrandOutcome:
     """Compute notice timing, then ask the model to explain it.
 
@@ -482,7 +503,9 @@ def run_notice_strand(
     step fails, the strand is reported failed — the run is partial, not a
     success — but the computed timing and its confidence remain on the record.
     """
-    computation = compute_notice_timing(facts.edition_code, facts.awareness_date, notices)
+    computation = compute_notice_timing(
+        facts.edition_code, facts.awareness_date, notices, requirements=requirements
+    )
 
     outcome = run_model_strand(
         plan,
@@ -538,30 +561,13 @@ def evidence_items_for(claim: Claim) -> list[EvidenceItem]:
 
 
 def notice_events_for(claim: Claim) -> list[NoticeEvent]:
-    events: list[NoticeEvent] = []
-    notices = claim.notices.select_related("correspondence__recipient").filter(
-        correspondence__deleted_at__isnull=True
+    from claimiq.claims.services.deadlines import notice_events
+
+    return notice_events(
+        claim.notices.select_related("correspondence__recipient").filter(
+            correspondence__deleted_at__isnull=True
+        )
     )
-    for notice in notices:
-        item = notice.correspondence
-        recipient = (
-            recipient_label(item.recipient.name, item.recipient.role)
-            if item.recipient_id
-            else item.recipient_raw
-        )
-        events.append(
-            NoticeEvent(
-                document_id=str(item.document_id or item.id),
-                document_title=item.subject or item.reference or "Notice",
-                sent_date=item.sent_date,
-                received_date=item.received_date,
-                subject=item.subject,
-                recipient=recipient,
-                is_confirmed_notice=notice.is_confirmed_notice,
-                clause_number=notice.clause_number,
-            )
-        )
-    return events
 
 
 # ---------------------------------------------------------------------------
@@ -610,8 +616,15 @@ def start_analysis(
     if existing is not None:
         return existing, False
 
+    from claimiq.claims.services.deadlines import requirements_for_claim
+
     facts = facts_from_claim(claim)
-    plans = plan_analysis(facts, notice_clause_numbers=notice_clause_numbers_for(facts.edition_code))
+    plans = plan_analysis(
+        facts,
+        notice_clause_numbers=notice_clause_numbers_for(
+            facts.edition_code, requirements_for_claim(claim)
+        ),
+    )
 
     analysis = ClaimAnalysis.objects.create(
         project=project,
@@ -739,15 +752,19 @@ def run_analysis(analysis_id, *, answering_service=None) -> ClaimAnalysis:
     analysis.started_at = analysis.started_at or timezone.now()
     analysis.save(update_fields=["status", "started_at", "updated_at"])
 
+    from claimiq.claims.services.deadlines import requirements_for_claim
+
     facts = facts_from_dict(analysis.claim_snapshot)
+    claim = analysis.claim
+    project = analysis.project
+    claim_requirements = requirements_for_claim(claim)
     plans = {
         plan.strand: plan
         for plan in plan_analysis(
-            facts, notice_clause_numbers=notice_clause_numbers_for(facts.edition_code)
+            facts,
+            notice_clause_numbers=notice_clause_numbers_for(facts.edition_code, claim_requirements),
         )
     }
-    claim = analysis.claim
-    project = analysis.project
     # Least privilege: a background run reads only this claim's project, whatever
     # else the requesting user could see.
     scope = combined_scope(
@@ -803,6 +820,7 @@ def run_analysis(analysis_id, *, answering_service=None) -> ClaimAnalysis:
                         scope=scope,
                         answering=answering,
                         retrieval_query=row.retrieval_query,
+                        requirements=claim_requirements,
                     )
                 else:
                     outcome = run_model_strand(

@@ -141,8 +141,25 @@ class Notice(BaseModel):
         "claims.Claim", null=True, blank=True, on_delete=models.CASCADE, related_name="notices"
     )
 
+    class Obligation(models.TextChoices):
+        """Mirrors ``notice_compliance.Obligation``."""
+
+        NOTICE_OF_CLAIM = "notice_of_claim", "Notice of claim"
+        DETAILED_CLAIM = "detailed_claim", "Detailed claim / particulars"
+
     clause_number = models.CharField(
         max_length=32, help_text="The provision the Notice is given under, e.g. 20.2.1."
+    )
+    obligation = models.CharField(
+        max_length=32,
+        choices=Obligation.choices,
+        blank=True,
+        help_text=(
+            "Whether this is the notice or the detailed submission that follows "
+            "it. One clause can impose both (FIDIC 1987 Sub-Clause 44.2, 1999 "
+            "Sub-Clause 20.1), so the clause alone cannot say. Blank means not "
+            "recorded, and the item counts towards either."
+        ),
     )
     edition_code = models.CharField(
         max_length=64,
@@ -167,7 +184,8 @@ class Notice(BaseModel):
         ordering = ["-created_at"]
         constraints = [
             models.UniqueConstraint(
-                fields=["correspondence", "clause_number"], name="uniq_notice_per_clause"
+                fields=["correspondence", "clause_number", "obligation"],
+                name="uniq_notice_per_clause_obligation",
             )
         ]
         indexes = [

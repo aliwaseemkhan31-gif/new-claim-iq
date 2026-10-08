@@ -94,6 +94,12 @@ export const routes = [
             meta: { title: 'Timeline' },
           },
           {
+            path: 'deadlines',
+            name: 'project-deadlines',
+            component: () => import('@/views/project/ProjectDeadlinesTab.vue'),
+            meta: { title: 'Contract deadlines', permission: 'claim.view' },
+          },
+          {
             path: 'clauses',
             name: 'project-clauses',
             component: () => import('@/views/project/ProjectClausesTab.vue'),
@@ -136,6 +142,18 @@ export const routes = [
         name: 'claims',
         component: () => import('@/views/ClaimsView.vue'),
         meta: { title: 'Claims', permission: 'claim.view' },
+      },
+      {
+        path: 'notices',
+        name: 'notices',
+        component: () => import('@/views/NoticesView.vue'),
+        meta: { title: 'Notices', permission: 'correspondence.view' },
+      },
+      {
+        path: 'checklist',
+        name: 'checklist',
+        component: () => import('@/views/ChecklistView.vue'),
+        meta: { title: 'Checklist', permission: 'claim.view' },
       },
       {
         path: 'claims/:claimId',

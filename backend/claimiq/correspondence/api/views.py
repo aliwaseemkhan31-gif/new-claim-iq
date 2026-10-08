@@ -14,6 +14,7 @@ from __future__ import annotations
 from django.db.models import QuerySet
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -35,7 +36,7 @@ class NoticeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notice
         fields = (
-            "id", "project", "correspondence", "claim", "clause_number", "edition_code",
+            "id", "project", "correspondence", "claim", "clause_number", "obligation", "edition_code",
             "is_confirmed_notice", "notes", "claim_reference", "claim_title",
             "correspondence_subject", "correspondence_reference", "sent_date", "received_date",
             "created_at", "updated_at",
@@ -173,7 +174,13 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
 class NoticeViewSet(viewsets.ModelViewSet):
     serializer_class = NoticeSerializer
     permission_classes = [IsAuthenticated]
-    http_method_names = ["get", "patch", "delete", "head", "options"]
+    # POST only for the actions below; notices are asserted over correspondence.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def create(self, request, *args, **kwargs):
+        raise ValidationError(
+            "Assert a notice over a correspondence item, or upload one to read."
+        )
     filterset_fields = ["project", "claim", "clause_number", "is_confirmed_notice"]
     ordering = ["correspondence__sent_date"]
 
@@ -198,3 +205,89 @@ class NoticeViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance: Notice) -> None:
         _require(self.request, instance.project_id, CORRESPONDENCE_MANAGE.code)
         instance.delete()
+
+
+    # -- Reading notices on arrival ----------------------------------------
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="intake/read",
+        parser_classes=[MultiPartParser, FormParser, JSONParser],
+    )
+    def intake_read(self, request: Request) -> Response:
+        """Upload a notice letter (or name one already uploaded) and read it.
+
+        Stores the file like any project document; the reading itself is a
+        proposal and nothing is filed until ``intake/save``.
+        """
+        from claimiq.claims.services.intake import document_summary, read_notice, receive
+
+        document = receive(
+            request,
+            document_type="notice",
+            permission_check=lambda project_id, permission: _require(request, project_id, permission),
+        )
+        return Response({"document": document_summary(document), "reading": read_notice(document)})
+
+    @action(detail=False, methods=["post"], url_path="intake/save")
+    def intake_save(self, request: Request) -> Response:
+        """File a read notice: on a claim, on a new claim, or on the register alone."""
+        from claimiq.claims.services.intake import save_notice
+        from claimiq.core.domain.errors import NotFoundError
+        from claimiq.documents.models import Document
+
+        context = access_for(request)
+        document = Document.objects.filter(
+            pk=request.data.get("document"),
+            project__organization_id=getattr(context, "organization_id", None),
+            deleted_at__isnull=True,
+        ).select_related("project").first()
+        if document is None or document.project_id not in context.accessible_project_ids:
+            raise NotFoundError("That document does not exist.")
+        _require(request, document.project_id, CORRESPONDENCE_MANAGE.code)
+        if request.data.get("claim") or request.data.get("new_claim"):
+            from claimiq.accounts.domain.permissions import CLAIM_CREATE, CLAIM_EDIT
+
+            _require(
+                request,
+                document.project_id,
+                CLAIM_CREATE.code if request.data.get("new_claim") else CLAIM_EDIT.code,
+            )
+        return Response(save_notice(document, dict(request.data), user=request.user), status=201)
+
+    @action(detail=False, methods=["get"])
+    def register(self, request: Request) -> Response:
+        """Every notice in a project, with its dates and deadline status."""
+        from claimiq.claims.services.notice_register import register
+        from claimiq.core.domain.errors import NotFoundError
+        from claimiq.projects.models import Project
+
+        context = access_for(request)
+        project = Project.objects.filter(
+            pk=request.query_params.get("project"),
+            organization_id=getattr(context, "organization_id", None),
+        ).first()
+        if project is None or project.pk not in context.accessible_project_ids:
+            raise NotFoundError("The requested project does not exist.")
+        _require(request, project.pk, CORRESPONDENCE_VIEW.code)
+        rows = register(project)
+        return Response({"count": len(rows), "results": rows})
+
+    @action(detail=True, methods=["post"])
+    def link(self, request: Request, pk: str | None = None) -> Response:
+        """Put this notice on a claim, filing its letter there."""
+        from claimiq.accounts.domain.permissions import CLAIM_EDIT
+        from claimiq.claims.models import Claim
+        from claimiq.claims.services.intake import link_notice
+
+        notice = self.get_object()
+        _require(request, notice.project_id, CORRESPONDENCE_MANAGE.code)
+        _require(request, notice.project_id, CLAIM_EDIT.code)
+        claim = Claim.objects.filter(
+            pk=request.data.get("claim"), project_id=notice.project_id, deleted_at__isnull=True
+        ).first()
+        if claim is None:
+            raise ValidationError("That claim is not in this project.", details={"field": "claim"})
+        link_notice(notice, claim, user=request.user)
+        return Response({"claim": str(claim.pk)})

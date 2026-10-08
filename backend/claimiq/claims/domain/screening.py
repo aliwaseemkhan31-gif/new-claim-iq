@@ -1306,10 +1306,13 @@ def _nc2(data: ScreeningInput) -> _Evaluation:
 
 
 def _nc3(data: ScreeningInput) -> _Evaluation:
+    # An unknown awareness date leaves timing indeterminate, not the notice
+    # given: count it missing unless a notice was actually found.
     not_given = tuple(
         f.requirement.clause_number
         for f in data.notice_of_claim_findings
         if f.status is ComplianceStatus.NOT_GIVEN
+        or (f.status is ComplianceStatus.INDETERMINATE and f.notice is None)
     )
     if not not_given:
         return _SATISFIED, "A notice is on record for every requirement.", ()
@@ -1341,10 +1344,14 @@ def _nc4(data: ScreeningInput) -> _Evaluation:
 
 
 def _nc5(data: ScreeningInput) -> _Evaluation:
-    late = tuple(
-        "Clause {} — {} day(s) late".format(f.requirement.clause_number, f.days_late)
+    findings = tuple(
+        f
         for f in data.notice_of_claim_findings
         if f.status is ComplianceStatus.LATE and not f.is_time_barred
+    )
+    late = tuple(
+        "Clause {} — {} day(s) late".format(f.requirement.clause_number, f.days_late)
+        for f in findings
     )
     if not late:
         return _SATISFIED, "No notice is late.", ()
@@ -1352,9 +1359,19 @@ def _nc5(data: ScreeningInput) -> _Evaluation:
         _INCOMPLETE,
         "Notice was late, under a provision not expressed as a condition "
         "precedent. The claim is not barred, but lateness invites an argument "
-        "about prejudice.",
+        "about prejudice." + _consequences(findings),
         late,
     )
+
+
+def _consequences(findings) -> str:
+    """What the contract itself says follows from lateness, once each."""
+    stated = []
+    for finding in findings:
+        text = finding.requirement.late_consequence
+        if text and text not in stated:
+            stated.append(text)
+    return "".join(" " + text for text in stated)
 
 
 def _nc6(data: ScreeningInput) -> _Evaluation:
@@ -1625,7 +1642,12 @@ def _dc1(data: ScreeningInput) -> _Evaluation:
             (),
         )
 
-    missing = tuple(f for f in findings if f.status is ComplianceStatus.NOT_GIVEN)
+    missing = tuple(
+        f
+        for f in findings
+        if f.status is ComplianceStatus.NOT_GIVEN
+        or (f.status is ComplianceStatus.INDETERMINATE and f.notice is None)
+    )
     if not missing:
         return _SATISFIED, "A fully detailed Claim is on record under {}.".format(
             _clauses(findings)
@@ -1671,10 +1693,10 @@ def _dc2(data: ScreeningInput) -> _Evaluation:
             (),
         )
 
+    late_findings = tuple(f for f in findings if f.status is ComplianceStatus.LATE)
     late = tuple(
         "Clause {} — {} day(s) late".format(f.requirement.clause_number, f.days_late)
-        for f in findings
-        if f.status is ComplianceStatus.LATE
+        for f in late_findings
     )
     if not late:
         return _SATISFIED, "The fully detailed Claim was submitted in time.", ()
@@ -1682,7 +1704,8 @@ def _dc2(data: ScreeningInput) -> _Evaluation:
         _INCOMPLETE,
         "The fully detailed Claim was submitted outside its period. These "
         "provisions are not conditions precedent, so this does not bar the "
-        "claim, but check whether a longer period was proposed and agreed.",
+        "claim, but check whether a longer period was proposed and agreed."
+        + _consequences(late_findings),
         late,
     )
 

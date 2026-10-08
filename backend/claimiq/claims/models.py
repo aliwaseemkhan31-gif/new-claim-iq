@@ -372,6 +372,101 @@ class ClaimPosition(BaseModel):
         return f"{self.party or 'Unattributed'}: {self.summary[:60]}"
 
 
+class ContractDeadline(BaseModel):
+    """A notice or submission deadline as this project's contract states it.
+
+    The standard form's periods are the default. The Particular Conditions
+    take precedence where they differ, so a project whose contract shortens
+    the notice period from 28 days to 14 must be assessed on 14. Each row
+    amends, adds or removes one standard requirement (matched on clause and
+    obligation).
+
+    Rows read from a document arrive as suggestions and apply only once a
+    person confirms them: a period read off a scanned page is a reading, and
+    an amended deadline applied on a misreading moves every finding built on
+    it.
+    """
+
+    class Action(models.TextChoices):
+        AMEND = "amend", "Amends the standard requirement"
+        ADD = "add", "Adds a requirement"
+        REMOVE = "remove", "Deletes the standard requirement"
+
+    class Status(models.TextChoices):
+        SUGGESTED = "suggested", "Suggested — not applied"
+        CONFIRMED = "confirmed", "Confirmed — applied"
+        REJECTED = "rejected", "Rejected"
+
+    class Obligation(models.TextChoices):
+        NOTICE_OF_CLAIM = "notice_of_claim", "Notice of claim"
+        DETAILED_CLAIM = "detailed_claim", "Detailed claim / particulars"
+
+    class RunsFrom(models.TextChoices):
+        AWARENESS = "awareness", "The event / awareness of it"
+        NOTICE = "notice", "A notice under another provision"
+
+    class AppliesTo(models.TextChoices):
+        ALL = "all", "All claims"
+        TIME = "time", "Claims for time"
+        MONEY = "money", "Claims for money"
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="contract_deadlines"
+    )
+    clause_number = models.CharField(max_length=32)
+    obligation = models.CharField(
+        max_length=32, choices=Obligation.choices, default=Obligation.NOTICE_OF_CLAIM
+    )
+    action = models.CharField(max_length=16, choices=Action.choices, default=Action.AMEND)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.SUGGESTED, db_index=True
+    )
+
+    title = models.CharField(max_length=255, blank=True)
+    period_days = models.PositiveIntegerField(null=True, blank=True)
+    day_count = models.CharField(
+        max_length=16,
+        blank=True,
+        choices=[("calendar", "Calendar days"), ("working", "Working days")],
+    )
+    runs_from = models.CharField(max_length=16, choices=RunsFrom.choices, blank=True)
+    runs_from_clause = models.CharField(max_length=32, blank=True)
+    applies_to = models.CharField(max_length=16, choices=AppliesTo.choices, blank=True)
+    is_condition_precedent = models.BooleanField(null=True, blank=True)
+    recipient = models.CharField(max_length=128, blank=True)
+    late_consequence = models.TextField(blank=True)
+    note = models.TextField(blank=True)
+
+    # -- Where it was read from
+    source_document = models.ForeignKey(
+        Document, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    source_page = models.PositiveIntegerField(null=True, blank=True)
+    source_excerpt = models.TextField(blank=True)
+
+    confirmed_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "claims_contract_deadline"
+        ordering = ["clause_number", "obligation", "created_at"]
+        indexes = [models.Index(fields=["project", "status"])]
+
+    def __str__(self) -> str:
+        return f"{self.clause_number} {self.obligation} ({self.status})"
+
+    @property
+    def source_label(self) -> str:
+        """Where the amendment comes from, for display beside the period."""
+        if self.source_document_id:
+            title = self.source_document.title if self.source_document else "contract document"
+            page = f", p. {self.source_page}" if self.source_page else ""
+            return f"{title}{page}"
+        return "Recorded by hand from the contract"
+
+
 class EvidenceRelevance(models.TextChoices):
     SUPPORTS = "supports", "Supports"
     CONTRADICTS = "contradicts", "Contradicts"

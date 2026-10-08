@@ -14,6 +14,8 @@ import FormField from '@/components/common/FormField.vue'
 import LoadingSkeleton from '@/components/common/LoadingSkeleton.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import AnalysisPanel from '@/components/domain/AnalysisPanel.vue'
+import ClaimChecklist from '@/components/domain/ClaimChecklist.vue'
+import ClaimFilesPanel from '@/components/domain/ClaimFilesPanel.vue'
 import ScreeningPanel from '@/components/domain/ScreeningPanel.vue'
 import CorrespondencePanel from '@/components/domain/CorrespondencePanel.vue'
 import EvidencePanel from '@/components/domain/EvidencePanel.vue'
@@ -42,6 +44,10 @@ const TABS = [
   // Screening leads because it is the first question asked of a claim, and it
   // is answerable before any of the others have anything to show.
   ['screening', 'Screening'],
+  // The checklist and the documents behind it sit next to screening: they are
+  // where most of what screening asks for is put right.
+  ['checklist', 'Checklist'],
+  ['documents', 'Documents'],
   ['overview', 'Overview'],
   ['notices', 'Notice'],
   ['evidence', 'Evidence'],
@@ -102,6 +108,8 @@ const project = ref(null)
 const gaps = ref(null)
 const notice = ref(null)
 const screening = ref(null)
+const checklist = ref(null)
+const filesPanel = ref(null)
 const loading = ref(true)
 const error = ref(null)
 
@@ -136,7 +144,7 @@ const SCREENING_ACTIONS = {
   CB2: { kind: 'edit', label: 'Record the clauses', icon: 'pi pi-pencil' },
   CB4: { kind: 'edit', label: 'Record the parties', icon: 'pi pi-pencil' },
   NC1: { kind: 'edit', label: 'Record the awareness date', icon: 'pi pi-pencil' },
-  NC3: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
+  NC3: { kind: 'file', role: 'notice', label: 'Add the notice', icon: 'pi pi-upload' },
   NC6: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
   NC7: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
   NC8: { kind: 'tab', tab: 'notices', label: 'Go to Notice', icon: 'pi pi-arrow-right' },
@@ -145,7 +153,8 @@ const SCREENING_ACTIONS = {
   EV3: { kind: 'edit', label: 'Correct the dates', icon: 'pi pi-pencil' },
   EV4: { kind: 'edit', label: 'Correct the dates', icon: 'pi pi-pencil' },
   EV5: { kind: 'tab', tab: 'notices', label: 'Record the instruction', icon: 'pi pi-arrow-right' },
-  RC1: { kind: 'tab', tab: 'evidence', label: 'Go to Evidence', icon: 'pi pi-arrow-right' },
+  RC1: { kind: 'tab', tab: 'documents', label: 'Add supporting documents', icon: 'pi pi-upload' },
+  DC1: { kind: 'file', role: 'claim_submission', label: 'Add the claim document', icon: 'pi pi-upload' },
   QR1: { kind: 'edit', label: 'Record the relief', icon: 'pi pi-pencil' },
   QR2: { kind: 'edit', label: 'Record the currency', icon: 'pi pi-pencil' },
   QR3: { kind: 'edit', label: 'Correct the figure', icon: 'pi pi-pencil' },
@@ -156,6 +165,7 @@ const screeningActions = computed(() => (canEdit.value ? SCREENING_ACTIONS : {})
 
 function actOnScreening(action) {
   if (action.kind === 'edit') openEdit()
+  else if (action.kind === 'file') fileDocument(action.role, action.element)
   else if (action.kind === 'tab') setTab(action.tab)
   else if (action.kind === 'route' && claim.value) {
     router.push({ name: 'project-overview', params: { projectId: claim.value.project } })
@@ -166,14 +176,47 @@ function setTab(next) {
   router.replace({ query: { ...route.query, tab: next } })
 }
 
+/**
+ * Open the filing dialog for a role, from the checklist or screening.
+ *
+ * Through the URL when the documents panel is not on screen, so the panel
+ * opens the dialog as it mounts; directly when it already is.
+ */
+function fileDocument(role, element = '') {
+  if (tab.value === 'documents' && filesPanel.value) {
+    filesPanel.value.open(role, element)
+    return
+  }
+  const query = { ...route.query, tab: 'documents', add: role }
+  if (element) query.element = element
+  else delete query.element
+  router.replace({ query })
+}
+
+/** The dialog has opened; drop the request so a reload does not reopen it. */
+function onFilesOpened() {
+  if (!route.query.add && !route.query.element) return
+  const query = { ...route.query }
+  delete query.add
+  delete query.element
+  router.replace({ query })
+}
+
+function actOnChecklist(action) {
+  if (action.kind === 'edit') openEdit()
+  else if (action.kind === 'file') fileDocument(action.role, action.element)
+}
+
 async function loadComputed() {
-  const [gapResult, noticeResult, screeningResult] = await Promise.allSettled([
+  const [gapResult, noticeResult, screeningResult, checklistResult] = await Promise.allSettled([
     claimsApi.fetchEvidenceGaps(props.claimId),
     claimsApi.fetchNoticeCompliance(props.claimId),
     claimsApi.fetchScreening(props.claimId),
+    claimsApi.fetchClaimChecklist(props.claimId),
   ])
   gaps.value = gapResult.status === 'fulfilled' ? gapResult.value : null
   screening.value = screeningResult.status === 'fulfilled' ? screeningResult.value : null
+  checklist.value = checklistResult.status === 'fulfilled' ? checklistResult.value : null
   notice.value =
     noticeResult.status === 'fulfilled'
       ? noticeResult.value
@@ -194,6 +237,13 @@ async function load() {
       parties.value = []
     }
     await loadComputed()
+    // Sent here from the checklist to record a date.
+    if (route.query.edit === '1' && canEdit.value) {
+      const query = { ...route.query }
+      delete query.edit
+      router.replace({ query })
+      openEdit()
+    }
   } catch (err) {
     error.value = err
   } finally {
@@ -450,6 +500,45 @@ onMounted(load)
         />
       </template>
 
+      <!-- Checklist -->
+      <template v-if="tab === 'checklist'">
+        <section class="surface claim__section">
+          <div class="row between gap-2 wrap">
+            <p class="section-title">Claim checklist</p>
+            <span v-if="checklist" class="text-xs text-muted">
+              {{ checklist.outstanding ? `${checklist.outstanding} to do` : 'Nothing outstanding' }}
+            </span>
+          </div>
+          <p class="text-xs text-muted">
+            Whether the event, each notice, the claim document and each element of the claim are
+            on record, and whether each was given within the period this contract sets. Deadlines
+            are worked out from the recorded dates, not by a model.
+          </p>
+          <ClaimChecklist
+            v-if="checklist"
+            :checklist="checklist"
+            :can-edit="canEdit"
+            @act="actOnChecklist"
+          />
+          <p v-else class="text-sm text-muted">The checklist could not be built for this claim.</p>
+        </section>
+      </template>
+
+      <!-- Documents -->
+      <ClaimFilesPanel
+        v-if="tab === 'documents' && projectId"
+        ref="filesPanel"
+        :claim-id="claimId"
+        :project-id="projectId"
+        :can-edit="canEdit"
+        :findings="notice?.findings || []"
+        :elements="gaps?.elements || []"
+        :open-role="String(route.query.add || '')"
+        :open-element="String(route.query.element || '')"
+        @opened="onFilesOpened"
+        @changed="loadComputed"
+      />
+
       <!-- Overview -->
       <template v-if="tab === 'overview'">
         <section v-if="claim.description" class="surface claim__section">
@@ -572,13 +661,26 @@ onMounted(load)
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="finding in notice.findings" :key="finding.clause_number">
+                <tr
+                  v-for="finding in notice.findings"
+                  :key="`${finding.clause_number}:${finding.obligation}`"
+                >
                   <td class="text-mono">{{ finding.clause_number }}</td>
                   <td>
-                    {{ finding.description }}
-                    <span v-if="finding.is_condition_precedent" class="text-xs text-muted">
-                      condition precedent
+                    <strong>{{ finding.title || finding.description }}</strong>
+                    <span class="text-xs text-muted">
+                      · {{ finding.period_days }} days<template v-if="finding.runs_from === 'notice'">
+                        after the notice under Clause {{ finding.runs_from_clause }}</template>
                     </span>
+                    <span v-if="finding.is_condition_precedent" class="text-xs text-muted">
+                      · condition precedent
+                    </span>
+                    <p v-if="finding.is_amended" class="text-xs text-info">
+                      Amended by this contract: {{ finding.source }}
+                    </p>
+                    <p v-if="finding.notice" class="text-xs text-muted">
+                      On record: {{ finding.notice.title }}
+                    </p>
                   </td>
                   <td>
                     <StatusBadge :status="finding.status" size="sm" />

@@ -338,7 +338,7 @@ def test_editions_expose_different_requirements() -> None:
     r2017 = requirements_for_edition("red-book-2017")
     r1987 = requirements_for_edition("red-book-1987")
     assert {r.clause_number for r in r2017} == {"20.2.1", "20.2.4"}
-    assert {r.clause_number for r in r1987} == {"53.1"}
+    assert {r.clause_number for r in r1987} == {"44.2", "53.1", "53.3"}
 
 
 def test_the_two_editions_differ_on_condition_precedent() -> None:
@@ -384,14 +384,16 @@ def test_the_silver_books_address_notice_to_the_employer() -> None:
 
 
 def test_the_engineer_forms_address_notice_to_the_engineer() -> None:
-    for code in ("red-book-1999", "red-book-2017", "yellow-book-2017", "red-book-1987"):
+    for code in (
+        "red-book-1999", "yellow-book-1999", "red-book-2017", "yellow-book-2017", "red-book-1987",
+    ):
         recipients = {r.recipient for r in requirements_for_edition(code)}
         assert recipients == {"the Engineer"}, code
 
 
 def test_notice_periods_match_the_suite_each_edition_belongs_to() -> None:
     """1999 suite: 28 days then 42. 2017 suite: 28 days then 84."""
-    for code in ("red-book-1999", "silver-book-1999"):
+    for code in ("red-book-1999", "silver-book-1999", "yellow-book-1999"):
         periods = sorted(r.period_days for r in requirements_for_edition(code))
         assert periods == [28, 42], code
     for code in ("red-book-2017", "silver-book-2017", "yellow-book-2017"):

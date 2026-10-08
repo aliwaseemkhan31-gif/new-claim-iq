@@ -80,6 +80,15 @@ export const STATUS_TONES = Object.freeze({
   overdue: 'danger',
   down: 'danger',
   not_ready: 'danger',
+
+  // Claim checklist and contract deadlines
+  missing: 'danger',
+  barred: 'danger',
+  due: 'info',
+  optional: 'neutral',
+  contested: 'warning',
+  suggested: 'info',
+  confirmed: 'success',
 })
 
 export const TONES = Object.freeze(['neutral', 'info', 'success', 'warning', 'danger'])

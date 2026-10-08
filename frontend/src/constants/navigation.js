@@ -52,6 +52,18 @@ export const NAV_GROUPS = [
     items: [
       { label: 'Claims', icon: 'pi pi-briefcase', to: { name: 'claims' }, permission: 'claim.view' },
       {
+        label: 'Notices',
+        icon: 'pi pi-send',
+        to: { name: 'notices' },
+        permission: 'correspondence.view',
+      },
+      {
+        label: 'Checklist',
+        icon: 'pi pi-list-check',
+        to: { name: 'checklist' },
+        permission: 'claim.view',
+      },
+      {
         label: 'AI Workspace',
         icon: 'pi pi-sparkles',
         to: { name: 'ai-workspace' },
@@ -89,6 +101,7 @@ export const PROJECT_TABS = [
   { label: 'Correspondence', name: 'project-correspondence', permission: 'correspondence.view' },
   { label: 'Evidence', name: 'project-evidence', permission: 'evidence.view' },
   { label: 'Timeline', name: 'project-timeline' },
+  { label: 'Contract deadlines', name: 'project-deadlines', permission: 'claim.view' },
   { label: 'Clauses', name: 'project-clauses' },
   { label: 'AI Analysis', name: 'project-ai', permission: 'ai.query' },
   { label: 'Reports', name: 'project-reports', permission: 'report.view' },

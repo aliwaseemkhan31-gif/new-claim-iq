@@ -224,6 +224,192 @@ Respond with JSON in exactly the shape shown above.""",
 )
 
 
+#: Fields a notice letter is read for.
+NOTICE_FIELDS = (
+    "letter_date",
+    "received_date",
+    "reference",
+    "subject",
+    "sender",
+    "recipient",
+    "clauses",
+    "notice_kind",
+    "event_description",
+    "event_date",
+    "claim_reference",
+)
+
+NOTICE_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": dict(
+        [(name, {"type": ["string", "null"]}) for name in NOTICE_FIELDS]
+        + [
+            (
+                "quotes",
+                {
+                    "type": "object",
+                    "properties": {name: {"type": ["string", "null"]} for name in NOTICE_FIELDS},
+                },
+            ),
+            ("notes", {"type": "array", "items": {"type": "string"}}),
+        ]
+    ),
+    "required": list(NOTICE_FIELDS),
+}
+
+NOTICE_EXTRACTION = PromptTemplate(
+    key="notice_extraction",
+    version="1.0.0",
+    system=(
+        "You read construction contract letters and report what they say. You "
+        "are transcribing, not assessing: you decide nothing about whether a "
+        "notice is valid or in time. A person checks every value you return "
+        "against the letter."
+    ),
+    required_variables=frozenset({"document_text"}),
+    template="""Read the letter below. It may be a notice given under a \
+construction contract.
+
+LETTER
+{document_text}
+
+Return one key per field, and put the exact words you read each value from in \
+"quotes" under the same key. Where the letter does not state a field, return \
+null for it.
+
+Shape of the answer. Never copy the words in angle brackets:
+
+{{
+  "letter_date": "<the date written on the letter itself, or null>",
+  "received_date": "<a date of receipt stamped or written on it, or null>",
+  "reference": "<the letter's own reference number, or null>",
+  "subject": "<the subject line, or null>",
+  "sender": "<who wrote it, or null>",
+  "recipient": "<who it is addressed to, or null>",
+  "clauses": "<the clause numbers it says it is given under, as written, or null>",
+  "notice_kind": "<one of the codes listed below, or null>",
+  "event_description": "<the event it notifies, in a few words, or null>",
+  "event_date": "<when that event happened, if the letter says, or null>",
+  "claim_reference": "<a claim number it refers to, or null>",
+  "quotes": {{
+    "<field name>": "<the exact words from the letter you read it from>"
+  }},
+  "notes": ["<anything the reader needs to know>"]
+}}
+
+Rules:
+1. letter_date is the date the letter bears, usually beside "Date:" or under \
+the reference at the top. It is not a date mentioned in the body. If the \
+letter carries no date of its own, return null.
+2. notice_kind must be one of: notice_of_claim (a notice of a claim, of \
+intention to claim, or of a delay or event that may give rise to a claim), \
+detailed_particulars (the detailed particulars, account or fully detailed \
+claim that follows a notice), other (any other letter). Return null only if \
+you cannot tell.
+3. Never return a value that is not on the page, and never return the \
+placeholder text from the shape. Do not work a date out from other dates.
+4. Every quote must be words copied from the letter. Give a quote for every \
+field you fill in.
+5. The text may come from OCR and run words together; read through that.
+
+Respond with JSON in exactly the shape shown above.""",
+)
+
+
+#: What a part of a claim bundle can be.
+BUNDLE_KINDS = (
+    "claim_letter",
+    "notice",
+    "correspondence",
+    "programme",
+    "site_record",
+    "minutes",
+    "invoice_cost",
+    "measurement",
+    "calculation",
+    "photograph",
+    "drawing",
+    "contract_extract",
+    "report",
+    "other",
+)
+
+BUNDLE_SEGMENTATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "first_page": {"type": "integer"},
+                    "last_page": {"type": "integer"},
+                    "kind": {"type": "string", "enum": list(BUNDLE_KINDS)},
+                    "title": {"type": ["string", "null"]},
+                    "date": {"type": ["string", "null"]},
+                },
+                "required": ["first_page", "last_page", "kind"],
+            },
+        },
+        "notes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["segments"],
+}
+
+BUNDLE_SEGMENTATION = PromptTemplate(
+    key="bundle_segmentation",
+    version="1.0.0",
+    system=(
+        "You sort the pages of a construction claim submission into the "
+        "documents it is made of. You describe what each document is; you form "
+        "no view on whether the claim is good."
+    ),
+    required_variables=frozenset({"pages", "first_page", "last_page"}),
+    template="""Below is the start of each page of a claim submission, pages \
+{first_page} to {last_page}. A submission is usually a covering claim letter \
+followed by the documents it relies on: notices, letters, programmes, site \
+diaries, meeting minutes, invoices, measurement sheets, calculations, \
+photographs and drawings.
+
+PAGES
+{pages}
+
+Split pages {first_page} to {last_page} into the separate documents they \
+belong to. A new document usually starts where a page has its own letterhead, \
+date and reference, a heading such as "Annex", "Appendix", "Attachment" or \
+"Enclosure", or a different kind of content from the page before.
+
+Return:
+
+{{
+  "segments": [
+    {{"first_page": <number>, "last_page": <number>, "kind": "<code>", \
+"title": "<a short title from the page, or null>", "date": "<the date the \
+document bears, or null>"}}
+  ],
+  "notes": ["<anything the reader needs to know>"]
+}}
+
+Rules:
+1. Cover every page from {first_page} to {last_page} exactly once, in order, \
+with no gaps and no overlaps.
+2. kind is one of: claim_letter (the claim itself: the letter or statement \
+that sets out what is claimed and why), notice (a notice of claim, of delay or \
+of intention to claim), correspondence (any other letter or email), programme \
+(a programme, schedule or time analysis), site_record (a daily report, diary, \
+progress report or site record), minutes (minutes of a meeting), invoice_cost \
+(an invoice, receipt, payment record or cost record), measurement (a \
+measurement sheet or quantity record), calculation (a calculation of the time \
+or money claimed), photograph, drawing, contract_extract (pages of the \
+contract), report (a technical or expert report), other.
+3. title comes from the page itself. Do not invent one; return null if the \
+page gives none.
+4. date is the date the document bears, as written. Return null if it bears none.
+
+Respond with JSON in exactly the shape shown above.""",
+)
+
+
 GROUNDED_ANSWER = PromptTemplate(
     key="grounded_answer",
     version="1.2.0",
@@ -495,6 +681,8 @@ ALL_PROMPTS: tuple[PromptTemplate, ...] = (
     COUNTERARGUMENTS_ANALYSIS,
     EVIDENCE_GAP_ANALYSIS,
     CLAIM_EXTRACTION,
+    NOTICE_EXTRACTION,
+    BUNDLE_SEGMENTATION,
 )
 
 PROMPTS_BY_KEY: Mapping[str, PromptTemplate] = {p.key: p for p in ALL_PROMPTS}
